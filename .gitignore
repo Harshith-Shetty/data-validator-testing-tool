@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Backend runtime data (uploaded files parsed to JSON + run results)
+backend/storage/
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+
+# Editors & OS
+.DS_Store
+.idea/
+.vscode/
+*.log

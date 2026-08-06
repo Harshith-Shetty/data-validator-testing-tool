@@ -1,0 +1,98 @@
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>Data capture validation</h1>
+      <p class="subtitle">
+        Upload a before file, the current file and the delta that describes what should have
+        changed. Every cell is checked and coloured: green when it is where it should be, red when
+        it is not.
+      </p>
+    </div>
+    <button class="primary" (click)="showForm.set(!showForm())">
+      {{ showForm() ? 'Cancel' : '+ New test' }}
+    </button>
+  </div>
+
+  @if (error()) {
+    <p class="banner">{{ error() }}</p>
+  }
+
+  @if (showForm()) {
+    <div class="card create-card">
+      <h2>Create a capture validation test</h2>
+      <div class="create-grid">
+        <label class="field">
+          <span>Test name</span>
+          <input
+            type="text"
+            [(ngModel)]="name"
+            placeholder="e.g. Issuer country capture — nightly"
+            (keyup.enter)="create()"
+          />
+        </label>
+        <label class="field">
+          <span>Description (optional)</span>
+          <input type="text" [(ngModel)]="description" placeholder="What does this test cover?" />
+        </label>
+        <button class="primary" [disabled]="!name.trim() || creating()" (click)="create()">
+          {{ creating() ? 'Creating…' : 'Create and add files' }}
+        </button>
+      </div>
+    </div>
+  }
+
+  @if (loading()) {
+    <p class="empty">Loading tests…</p>
+  } @else if (!tests().length) {
+    <div class="card empty">
+      <p><strong>No tests yet.</strong></p>
+      <p>Create your first capture validation test to upload the three files.</p>
+    </div>
+  } @else {
+    <div class="test-grid">
+      @for (test of tests(); track test.id) {
+        <a class="card test-card" [routerLink]="['/tests', test.id]">
+          <div class="test-card-head">
+            <h2>{{ test.name }}</h2>
+            <span class="pill" [class]="'pill ' + statusClass(test)">
+              {{ test.last_run?.status ?? 'NOT RUN' }}
+            </span>
+          </div>
+
+          @if (test.description) {
+            <p class="muted description">{{ test.description }}</p>
+          }
+
+          <div class="meta">
+            <span>{{ uploadCount(test) }}/3 files</span>
+            <span>·</span>
+            <span>Updated {{ test.updated_at | date: 'short' }}</span>
+          </div>
+
+          @if (test.last_run; as run) {
+            <div class="counts">
+              <span class="pill pass">{{ run.rows_passed }} rows passed</span>
+              @if (run.rows_warned) {
+                <span class="pill warn">{{ run.rows_warned }} warned</span>
+              }
+              @if (run.rows_failed) {
+                <span class="pill fail">{{ run.rows_failed }} failed</span>
+              }
+            </div>
+          } @else {
+            <div class="counts muted">Not run yet</div>
+          }
+
+          <div class="card-actions">
+            @if (test.last_run; as run) {
+              <a class="btn small" [routerLink]="['/tests', test.id, 'results', run.run_id]">
+                View results
+              </a>
+            }
+            <button class="small ghost danger" (click)="remove(test, $event)">Delete</button>
+          </div>
+        </a>
+      }
+    </div>
+  }
+</div>

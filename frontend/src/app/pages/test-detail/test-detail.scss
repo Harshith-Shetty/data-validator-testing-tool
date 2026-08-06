@@ -1,0 +1,87 @@
+.back {
+  display: inline-block;
+  font-size: 0.8rem;
+  text-decoration: none;
+  margin-bottom: 0.35rem;
+}
+
+.drop {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-style: dashed;
+  transition: border-color 0.12s ease, background 0.12s ease;
+
+  &.filled {
+    border-style: solid;
+  }
+
+  &.dragging {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+}
+
+.blurb {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.filename {
+  margin: 0.2rem 0 0;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.small {
+  font-size: 0.78rem;
+}
+
+.upload-btn {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.previews {
+  display: grid;
+  gap: 1rem;
+}
+
+.preview h3 {
+  margin-bottom: 0.35rem;
+  text-transform: capitalize;
+}
+
+.config-grid > div {
+  min-width: 0;
+}
+
+.spaced {
+  margin-top: 1rem;
+}
+
+.modes label.check strong {
+  text-transform: capitalize;
+}
+
+.mapping-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) auto minmax(120px, 1.4fr);
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.arrow {
+  color: var(--fg-muted);
+}
+
+.columns-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.tolerance {
+  max-width: 180px;
+  margin-top: 0.6rem;
+}

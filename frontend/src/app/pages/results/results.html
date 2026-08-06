@@ -1,0 +1,171 @@
+<div class="page results-page">
+  <div class="page-head">
+    <div>
+      <a class="back" [routerLink]="['/tests', testId()]">← Test setup</a>
+      <h1>Validation results</h1>
+      @if (summary(); as s) {
+        <p class="subtitle">
+          Run <span class="mono">{{ s.run_id }}</span> · {{ s.started_at | date: 'medium' }} ·
+          {{ s.duration_ms }} ms
+        </p>
+      }
+    </div>
+    <div class="row">
+      <button (click)="toggleBefore()">
+        {{ showBefore() ? 'Hide before values' : 'Show before values' }}
+      </button>
+      <a class="btn" [href]="exportUrl()" download>Export CSV</a>
+    </div>
+  </div>
+
+  @if (error()) {
+    <p class="banner">{{ error() }}</p>
+  }
+
+  @if (summary(); as s) {
+    <div class="tiles">
+      <div class="card tile" [class]="'card tile ' + statusClass(s.status)">
+        <h3>Overall</h3>
+        <strong class="tile-value">{{ s.status }}</strong>
+        <span class="muted">{{ passRate() }}% of cells correct</span>
+      </div>
+      <div class="card tile">
+        <h3>Rows</h3>
+        <strong class="tile-value">{{ s.rows_total }}</strong>
+        <span class="muted">{{ s.cells_total }} cells checked</span>
+      </div>
+      <div class="card tile pass">
+        <h3>Passed</h3>
+        <strong class="tile-value">{{ s.rows_passed }}</strong>
+        <span class="muted">{{ s.cells_passed }} cells</span>
+      </div>
+      <div class="card tile warn">
+        <h3>Warnings</h3>
+        <strong class="tile-value">{{ s.rows_warned }}</strong>
+        <span class="muted">{{ s.cells_warned }} cells</span>
+      </div>
+      <div class="card tile fail">
+        <h3>Failed</h3>
+        <strong class="tile-value">{{ s.rows_failed }}</strong>
+        <span class="muted">{{ s.cells_failed }} cells</span>
+      </div>
+    </div>
+
+    @if (issueList().length) {
+      <div class="card issues">
+        <h3>What went wrong</h3>
+        <div class="row">
+          @for (issue of issueList(); track issue.code) {
+            <span class="pill fail issue-pill">{{ issue.label }} · {{ issue.count }}</span>
+          }
+        </div>
+      </div>
+    }
+  }
+
+  <div class="card toolbar">
+    <div class="filters">
+      @for (status of statuses; track status) {
+        <button
+          class="small"
+          [class.active]="statusFilter() === status"
+          (click)="setStatus(status)"
+        >
+          {{ status === 'ALL' ? 'All rows' : status }}
+        </button>
+      }
+      <span class="divider"></span>
+      @for (type of rowTypeList(); track type.type) {
+        <button
+          class="small"
+          [class.active]="rowTypeFilter() === type.type"
+          (click)="setRowType(type.type)"
+        >
+          {{ type.label }} ({{ type.count }})
+        </button>
+      }
+    </div>
+    <div class="search-box">
+      <input
+        type="search"
+        placeholder="Search keys or values…"
+        [ngModel]="search()"
+        (ngModelChange)="search.set($event)"
+        (keyup.enter)="applySearch()"
+      />
+      <button class="small" (click)="applySearch()">Search</button>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i class="swatch pass"></i> correct — updated as the delta requires, or correctly left alone</span>
+    <span><i class="swatch fail"></i> wrong — missing update, wrong value, or a change nobody asked for</span>
+    <span><i class="swatch warn"></i> suspicious — worth a look</span>
+    <span><i class="swatch info"></i> not evaluated</span>
+  </div>
+
+  @if (loading()) {
+    <p class="empty">Loading results…</p>
+  } @else if (results(); as r) {
+    <div class="card grid-card">
+      <ag-grid-angular
+        class="grid"
+        [theme]="theme"
+        [rowData]="r.rows"
+        [columnDefs]="columnDefs()"
+        [gridOptions]="gridOptions"
+        [tooltipShowDelay]="200"
+        (rowClicked)="onRowClicked($event)"
+      />
+      <p class="muted small grid-foot">
+        Showing {{ r.rows.length }} of {{ r.total }} matching rows. Hover a cell for the full
+        verdict; click a row for its issues.
+      </p>
+    </div>
+
+    @if (selected(); as row) {
+      <div class="card detail">
+        <div class="card-head">
+          <h2>Row {{ row.key }}</h2>
+          <div class="row">
+            <span class="pill" [class]="'pill ' + statusClass(row.rowStatus)">{{ row.rowStatus }}</span>
+            <span class="pill info">{{ rowTypeLabels[row.rowType] ?? row.rowType }}</span>
+            <button class="small ghost" (click)="selected.set(null)">Close</button>
+          </div>
+        </div>
+        <div class="scroll-x">
+          <table class="plain">
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>Before</th>
+                <th>Current</th>
+                <th>Delta says</th>
+                <th>Verdict</th>
+                <th>Explanation</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (column of r.columns; track column) {
+                @if (row.cells[column]; as cell) {
+                  <tr>
+                    <td><strong>{{ column }}</strong></td>
+                    <td class="mono">{{ cell.before || '—' }}</td>
+                    <td class="mono">{{ cell.after || '—' }}</td>
+                    <td class="mono">{{ cell.expected ?? '—' }}</td>
+                    <td>
+                      <span class="pill" [class]="'pill ' + statusClass(cell.status)">
+                        {{ ruleLabels[cell.code] ?? cell.code }}
+                      </span>
+                    </td>
+                    <td class="explain">{{ cell.message || '—' }}</td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
+  }
+</div>

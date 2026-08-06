@@ -1,0 +1,31 @@
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">DV</span>
+      <div>
+        <strong>Data Validator</strong>
+        <small>testing tool</small>
+      </div>
+    </div>
+
+    <nav>
+      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+        <span class="dot"></span> Data capture validation
+      </a>
+      <span class="nav-disabled" title="Not built yet">
+        <span class="dot muted"></span> Reconciliation
+      </span>
+      <span class="nav-disabled" title="Not built yet">
+        <span class="dot muted"></span> Schema checks
+      </span>
+    </nav>
+
+    <div class="sidebar-foot">
+      <a href="/docs" target="_blank" rel="noopener">API docs</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <router-outlet />
+  </main>
+</div>

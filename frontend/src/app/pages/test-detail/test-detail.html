@@ -1,0 +1,302 @@
+<div class="page">
+  <div class="page-head">
+    <div>
+      <a routerLink="/" class="back">← All tests</a>
+      <h1>{{ test()?.name ?? 'Loading…' }}</h1>
+      @if (test()?.description) {
+        <p class="subtitle">{{ test()!.description }}</p>
+      }
+    </div>
+    <div class="row">
+      @if (test()?.last_run; as run) {
+        <a class="btn" [routerLink]="['/tests', testId(), 'results', run.run_id]">Latest results</a>
+      }
+      <button class="primary" [disabled]="!ready() || running()" (click)="run()">
+        {{ running() ? 'Validating…' : 'Run validation' }}
+      </button>
+    </div>
+  </div>
+
+  @if (error()) {
+    <p class="banner">{{ error() }}</p>
+  }
+  @if (notice() && !error()) {
+    <p class="banner info">{{ notice() }}</p>
+  }
+
+  <!-- ------------------------------------------------------------ uploads -->
+  <section class="stack">
+    <div class="grid-3">
+      @for (slot of slots; track slot.role) {
+        <div
+          class="card drop"
+          [class.dragging]="dragRole() === slot.role"
+          [class.filled]="!!dataset(slot.role)"
+          (dragover)="onDragOver(slot.role, $event)"
+          (dragleave)="dragRole.set(null)"
+          (drop)="onDrop(slot.role, $event)"
+        >
+          <div class="card-head">
+            <h2>{{ slot.title }}</h2>
+            @if (dataset(slot.role); as ds) {
+              <span class="pill pass">{{ ds.row_count }} rows</span>
+            }
+          </div>
+          <p class="muted blurb">{{ slot.blurb }}</p>
+
+          @if (dataset(slot.role); as ds) {
+            <p class="filename mono">{{ ds.filename }}</p>
+            <p class="muted small">{{ ds.columns.length }} columns · {{ ds.uploaded_at | date: 'short' }}</p>
+          } @else {
+            <p class="muted small">Drop a CSV/XLSX here, or</p>
+          }
+
+          <label class="btn small upload-btn">
+            {{ busyRole() === slot.role ? 'Uploading…' : dataset(slot.role) ? 'Replace file' : 'Choose file' }}
+            <input
+              type="file"
+              accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls"
+              hidden
+              (change)="onFileInput(slot.role, $event)"
+            />
+          </label>
+        </div>
+      }
+    </div>
+
+    <!-- ----------------------------------------------------------- previews -->
+    @if (dataset('before') || dataset('after') || dataset('delta')) {
+      <div class="card">
+        <div class="card-head"><h2>File previews</h2><span class="muted small">first 10 rows</span></div>
+        <div class="previews">
+          @for (slot of slots; track slot.role) {
+            @if (dataset(slot.role); as ds) {
+              <div class="preview">
+                <h3>{{ slot.role }}</h3>
+                <div class="scroll-x">
+                  <table class="plain">
+                    <thead>
+                      <tr>
+                        @for (column of previewColumns(slot.role); track column) {
+                          <th>{{ column }}</th>
+                        }
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (row of ds.preview; track $index) {
+                        <tr>
+                          @for (column of previewColumns(slot.role); track column) {
+                            <td>{{ previewValue(row, column) }}</td>
+                          }
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            }
+          }
+        </div>
+      </div>
+    }
+
+    <!-- ------------------------------------------------------------- config -->
+    @if (config(); as cfg) {
+      <div class="card">
+        <div class="card-head">
+          <h2>How the files line up</h2>
+          <div class="row">
+            <button class="small" (click)="reSuggest()">Re-detect columns</button>
+            <button class="small" [disabled]="saving()" (click)="saveConfig()">
+              {{ saving() ? 'Saving…' : 'Save configuration' }}
+            </button>
+          </div>
+        </div>
+
+        <div class="grid-2 config-grid">
+          <div>
+            <h3>Row matching</h3>
+            <label class="field">
+              <span>Key column (before / current)</span>
+              <select [ngModel]="keyColumn()" (ngModelChange)="setKeyColumn($event)">
+                @for (column of dataColumns(); track column) {
+                  <option [value]="column">{{ column }}</option>
+                }
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Matching key column in the delta file</span>
+              <select
+                [ngModel]="deltaKeyColumn()"
+                (ngModelChange)="setDeltaKeyColumn($event)"
+              >
+                @for (column of deltaColumns(); track column) {
+                  <option [value]="column">{{ column }}</option>
+                }
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Last modified column (optional)</span>
+              <select
+                [ngModel]="cfg.last_modified_column ?? ''"
+                (ngModelChange)="setLastModified($event)"
+              >
+                <option value="">— none —</option>
+                @for (column of dataColumns(); track column) {
+                  <option [value]="column">{{ column }}</option>
+                }
+              </select>
+            </label>
+          </div>
+
+          <div>
+            <h3>What the delta file means</h3>
+            <div class="modes">
+              @for (mode of deltaModes; track mode) {
+                <label class="check">
+                  <input type="radio" name="mode" [value]="mode" [(ngModel)]="cfg.delta_value_mode" />
+                  <span>
+                    <strong>{{ mode.replace('_', ' ') }}</strong>
+                    <small>{{ modeLabels[mode] }}</small>
+                  </span>
+                </label>
+              }
+            </div>
+
+            <h3 class="spaced">Delta column → data column</h3>
+            @if (!payloadDeltaColumns().length) {
+              <p class="muted small">
+                The delta file has no value columns beyond the key, so it only marks which rows
+                should have changed.
+              </p>
+            }
+            @for (deltaColumn of payloadDeltaColumns(); track deltaColumn) {
+              <div class="mapping-row">
+                <span class="mono">{{ deltaColumn }}</span>
+                <span class="arrow">→</span>
+                <select
+                  [ngModel]="mappingFor(deltaColumn)"
+                  (ngModelChange)="setMapping(deltaColumn, $event)"
+                >
+                  <option value="">— ignore —</option>
+                  @for (column of dataColumns(); track column) {
+                    <option [value]="column">{{ column }}</option>
+                  }
+                </select>
+              </div>
+            }
+          </div>
+
+          <div>
+            <h3>Columns to compare</h3>
+            <div class="columns-list">
+              @for (column of dataColumns(); track column) {
+                @if (column !== keyColumn() && column !== cfg.last_modified_column) {
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      [checked]="isCompared(column)"
+                      (change)="toggleCompareColumn(column, $any($event.target).checked)"
+                    />
+                    <span>{{ column }}</span>
+                  </label>
+                }
+              }
+            </div>
+          </div>
+
+          <div>
+            <h3>Rules</h3>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.strict_unlisted_columns" />
+              <span>
+                Fail changes the delta did not ask for
+                <small>Off: those cells are flagged amber instead of red.</small>
+              </span>
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.check_timestamp" />
+              <span>
+                Check the last modified column
+                <small>Changed rows must move it forward; untouched rows must leave it alone.</small>
+              </span>
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.flag_timestamp_without_change" />
+              <span>Warn when last modified moves with no data change</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.flag_added_rows" />
+              <span>Fail rows that only exist in the current file</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.flag_deleted_rows" />
+              <span>Fail rows that disappeared from the current file</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.case_sensitive" />
+              <span>Case sensitive comparison</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.trim_whitespace" />
+              <span>Ignore leading/trailing whitespace</span>
+            </label>
+            <label class="field tolerance">
+              <span>Numeric tolerance</span>
+              <input type="number" step="0.0001" min="0" [(ngModel)]="cfg.numeric_tolerance" />
+            </label>
+          </div>
+        </div>
+
+        @if (!ready()) {
+          <p class="banner info">Upload all three files to run this test.</p>
+        }
+      </div>
+    }
+
+    <!-- ---------------------------------------------------------- run history -->
+    @if (runs().length) {
+      <div class="card">
+        <div class="card-head"><h2>Run history</h2></div>
+        <div class="scroll-x">
+          <table class="plain">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>When</th>
+                <th>Result</th>
+                <th>Rows</th>
+                <th>Passed</th>
+                <th>Warned</th>
+                <th>Failed</th>
+                <th>Duration</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (run of runs(); track run.run_id) {
+                <tr>
+                  <td class="mono">{{ run.run_id }}</td>
+                  <td>{{ run.started_at | date: 'short' }}</td>
+                  <td><span class="pill" [class]="'pill ' + statusClass(run.status)">{{ run.status }}</span></td>
+                  <td>{{ run.rows_total }}</td>
+                  <td>{{ run.rows_passed }}</td>
+                  <td>{{ run.rows_warned }}</td>
+                  <td>{{ run.rows_failed }}</td>
+                  <td>{{ run.duration_ms }} ms</td>
+                  <td>
+                    <a class="btn small" [routerLink]="['/tests', testId(), 'results', run.run_id]">
+                      Open
+                    </a>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
+  </section>
+</div>
