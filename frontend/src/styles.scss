@@ -1,0 +1,412 @@
+/* Design tokens + shared primitives for the validation dashboard. */
+
+:root {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --fg: #0f172a;
+  --fg-muted: #64748b;
+
+  --accent: #4f46e5;
+  --accent-soft: #eef2ff;
+  --accent-strong: #4338ca;
+
+  --pass: #15803d;
+  --pass-bg: #dcfce7;
+  --pass-border: #86efac;
+  --fail: #b91c1c;
+  --fail-bg: #fee2e2;
+  --fail-border: #fca5a5;
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
+  --warn-border: #fcd34d;
+  --info: #475569;
+  --info-bg: #f1f5f9;
+
+  --sidebar: #0f172a;
+  --sidebar-fg: #e2e8f0;
+  --sidebar-muted: #94a3b8;
+  --sidebar-border: #1e293b;
+  --sidebar-hover: #1e293b;
+  --sidebar-active: #4f46e5;
+
+  --radius: 12px;
+  --shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 8px 24px -12px rgb(15 23 42 / 18%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 {
+  font-size: 1.4rem;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+h3 {
+  font-size: 0.85rem;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+
+a {
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ layout */
+
+.page {
+  padding: 1.5rem 1.75rem 3rem;
+  max-width: 1600px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.subtitle {
+  color: var(--fg-muted);
+  margin: 0.3rem 0 0;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.15rem;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* ----------------------------------------------------------------- controls */
+
+button,
+.btn {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.48rem 0.9rem;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+
+button:hover:not(:disabled),
+.btn:hover {
+  background: var(--surface-alt);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary,
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+button.danger {
+  color: var(--fail);
+  border-color: var(--fail-border);
+}
+
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+button.small,
+.btn.small {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+input[type='text'],
+input[type='number'],
+input[type='search'],
+select,
+textarea {
+  font: inherit;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
+}
+
+label.field {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  margin-bottom: 0.55rem;
+
+  span {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-weight: 500;
+    color: var(--fg);
+  }
+}
+
+label.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  padding: 0.3rem 0;
+
+  input {
+    margin-top: 0.2rem;
+  }
+
+  small {
+    display: block;
+    color: var(--fg-muted);
+  }
+}
+
+/* ------------------------------------------------------------------ pills */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.pill.pass {
+  background: var(--pass-bg);
+  color: var(--pass);
+  border-color: var(--pass-border);
+}
+
+.pill.fail {
+  background: var(--fail-bg);
+  color: var(--fail);
+  border-color: var(--fail-border);
+}
+
+.pill.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: var(--warn-border);
+}
+
+.pill.info,
+.pill.neutral {
+  background: var(--info-bg);
+  color: var(--info);
+  border-color: var(--border);
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.82em;
+}
+
+.empty {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.banner {
+  padding: 0.65rem 0.85rem;
+  border-radius: 9px;
+  border: 1px solid var(--fail-border);
+  background: var(--fail-bg);
+  color: var(--fail);
+  font-size: 0.85rem;
+}
+
+.banner.info {
+  border-color: var(--border);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+/* ------------------------------------------------------------- basic table */
+
+table.plain {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+
+  th,
+  td {
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  th {
+    color: var(--fg-muted);
+    font-weight: 600;
+    background: var(--surface-alt);
+  }
+}
+
+.scroll-x {
+  overflow-x: auto;
+}
+
+/* --------------------------------------------------------- ag-grid colours */
+
+.ag-theme-dvt {
+  --ag-border-color: var(--border);
+  --ag-row-border-color: var(--border);
+  --ag-header-background-color: var(--surface-alt);
+  --ag-font-size: 13px;
+}
+
+.dvt-cell {
+  border-right: 1px solid var(--border);
+}
+
+.dvt-cell-pass {
+  background: var(--pass-bg) !important;
+  color: var(--pass);
+}
+
+.dvt-cell-fail {
+  background: var(--fail-bg) !important;
+  color: var(--fail);
+  font-weight: 600;
+}
+
+.dvt-cell-warn {
+  background: var(--warn-bg) !important;
+  color: var(--warn);
+}
+
+.dvt-cell-info {
+  color: var(--info);
+}
+
+.dvt-row-fail .ag-cell.dvt-cell-info {
+  background: #fff7f7;
+}
+
+.dvt-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* Pills sit inside flex grid cells, so pin their height instead of stretching. */
+.ag-cell .dvt-status {
+  align-self: center;
+  height: 21px;
+  line-height: 19px;
+  padding: 0 0.6rem;
+}
+
+.dvt-before {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+  opacity: 0.75;
+}
+
+.dvt-arrow {
+  opacity: 0.6;
+}
+
+.dvt-expected {
+  font-style: italic;
+  opacity: 0.8;
+}

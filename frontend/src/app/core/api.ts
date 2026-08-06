@@ -1,0 +1,73 @@
+import { HttpClient, HttpParams } from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
+import { Observable } from 'rxjs';
+
+import { FileRole, RunResults, RunSummary, TestConfig, ValidationTest } from './models';
+
+const BASE = '/api';
+
+export interface ResultFilters {
+  status?: string;
+  row_type?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+@Injectable({ providedIn: 'root' })
+export class Api {
+  private readonly http = inject(HttpClient);
+
+  listTests(): Observable<ValidationTest[]> {
+    return this.http.get<ValidationTest[]>(`${BASE}/tests`);
+  }
+
+  getTest(id: string): Observable<ValidationTest> {
+    return this.http.get<ValidationTest>(`${BASE}/tests/${id}`);
+  }
+
+  createTest(name: string, description = ''): Observable<ValidationTest> {
+    return this.http.post<ValidationTest>(`${BASE}/tests`, { name, description });
+  }
+
+  deleteTest(id: string): Observable<void> {
+    return this.http.delete<void>(`${BASE}/tests/${id}`);
+  }
+
+  uploadFile(id: string, role: FileRole, file: File): Observable<ValidationTest> {
+    const body = new FormData();
+    body.append('file', file, file.name);
+    return this.http.post<ValidationTest>(`${BASE}/tests/${id}/files/${role}`, body);
+  }
+
+  saveConfig(id: string, config: TestConfig): Observable<ValidationTest> {
+    return this.http.put<ValidationTest>(`${BASE}/tests/${id}/config`, config);
+  }
+
+  suggestConfig(id: string): Observable<TestConfig> {
+    return this.http.post<TestConfig>(`${BASE}/tests/${id}/config/suggest`, {});
+  }
+
+  runTest(id: string): Observable<RunSummary> {
+    return this.http.post<RunSummary>(`${BASE}/tests/${id}/run`, {});
+  }
+
+  listRuns(id: string): Observable<RunSummary[]> {
+    return this.http.get<RunSummary[]>(`${BASE}/tests/${id}/runs`);
+  }
+
+  getRun(id: string, runId: string, filters: ResultFilters = {}): Observable<RunResults> {
+    let params = new HttpParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== null && value !== '') {
+        params = params.set(key, String(value));
+      }
+    }
+    return this.http.get<RunResults>(`${BASE}/tests/${id}/runs/${runId}`, { params });
+  }
+
+  exportUrl(id: string, runId: string, status?: string): string {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    return `${BASE}/tests/${id}/runs/${runId}/export${query}`;
+  }
+}
