@@ -51,6 +51,24 @@ cd backend && .venv/bin/python -m pytest      # 20 tests: engine rules + API flo
 cd frontend && npm run build
 ```
 
+## Getting a URL you can share
+
+The app also runs as a single container: the Angular bundle is compiled and
+then served by the FastAPI app, so the dashboard and the API sit behind one
+port.
+
+```bash
+docker compose up --build        # → http://localhost:8000
+```
+
+That same `Dockerfile` is all any container host needs for a public https URL —
+Render (a `render.yaml` blueprint is included), Railway and Fly.io all build it
+directly. Set `DVT_STORAGE_DIR` to a mounted volume to keep tests and run
+history across restarts; hosts that inject `$PORT` are handled automatically.
+
+There is no authentication in front of the dashboard, so put it behind your own
+access control before exposing it to anything but a trusted network.
+
 ## Try it with the sample data
 
 `sample-data/` holds the worked example:
@@ -149,9 +167,12 @@ per test.
 ## Layout
 
 ```
+Dockerfile               builds frontend + backend into one image
+docker-compose.yml       one-command local run on :8000
+render.yaml              Render blueprint (Railway/Fly need no config)
 backend/
   app/
-    main.py                FastAPI app + CORS
+    main.py                FastAPI app, CORS, serves the built dashboard
     models.py              config, verdicts, rule codes
     ingest.py              CSV/XLSX → JSON rows
     storage.py             JSON file store (tests, datasets, runs)
