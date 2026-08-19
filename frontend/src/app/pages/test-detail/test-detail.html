@@ -116,39 +116,34 @@
         <div class="grid-2 config-grid">
           <div>
             <h3>Row matching</h3>
-            <label class="field">
+            <div class="field">
               <span>Key column (before / current)</span>
-              <select [ngModel]="keyColumn()" (ngModelChange)="setKeyColumn($event)">
-                @for (column of dataColumns(); track column) {
-                  <option [value]="column">{{ column }}</option>
-                }
-              </select>
-            </label>
+              <app-column-picker
+                [options]="dataColumns()"
+                [value]="keyColumn()"
+                (valueChange)="setKeyColumn($event)"
+              />
+            </div>
 
-            <label class="field">
+            <div class="field">
               <span>Matching key column in the delta file</span>
-              <select
-                [ngModel]="deltaKeyColumn()"
-                (ngModelChange)="setDeltaKeyColumn($event)"
-              >
-                @for (column of deltaColumns(); track column) {
-                  <option [value]="column">{{ column }}</option>
-                }
-              </select>
-            </label>
+              <app-column-picker
+                [options]="deltaColumns()"
+                [value]="deltaKeyColumn()"
+                (valueChange)="setDeltaKeyColumn($event)"
+              />
+            </div>
 
-            <label class="field">
+            <div class="field">
               <span>Last modified column (optional)</span>
-              <select
-                [ngModel]="cfg.last_modified_column ?? ''"
-                (ngModelChange)="setLastModified($event)"
-              >
-                <option value="">— none —</option>
-                @for (column of dataColumns(); track column) {
-                  <option [value]="column">{{ column }}</option>
-                }
-              </select>
-            </label>
+              <app-column-picker
+                [options]="dataColumns()"
+                [value]="cfg.last_modified_column || ''"
+                emptyLabel="— none —"
+                placeholder="— none —"
+                (valueChange)="setLastModified($event)"
+              />
+            </div>
           </div>
 
           <div>
@@ -176,33 +171,41 @@
               <div class="mapping-row">
                 <span class="mono">{{ deltaColumn }}</span>
                 <span class="arrow">→</span>
-                <select
-                  [ngModel]="mappingFor(deltaColumn)"
-                  (ngModelChange)="setMapping(deltaColumn, $event)"
-                >
-                  <option value="">— ignore —</option>
-                  @for (column of dataColumns(); track column) {
-                    <option [value]="column">{{ column }}</option>
-                  }
-                </select>
+                <app-column-picker
+                  [options]="dataColumns()"
+                  [value]="mappingFor(deltaColumn)"
+                  emptyLabel="— ignore —"
+                  placeholder="— ignore —"
+                  (valueChange)="setMapping(deltaColumn, $event)"
+                />
               </div>
             }
           </div>
 
           <div>
             <h3>Columns to compare</h3>
+            <input
+              type="search"
+              class="column-filter"
+              placeholder="Filter columns…"
+              [ngModel]="columnFilter()"
+              (ngModelChange)="columnFilter.set($event)"
+            />
+            <p class="muted small filter-count">
+              {{ visibleComparableColumns().length }} of {{ comparableColumns().length }} columns
+            </p>
             <div class="columns-list">
-              @for (column of dataColumns(); track column) {
-                @if (column !== keyColumn() && column !== cfg.last_modified_column) {
-                  <label class="check">
-                    <input
-                      type="checkbox"
-                      [checked]="isCompared(column)"
-                      (change)="toggleCompareColumn(column, $any($event.target).checked)"
-                    />
-                    <span>{{ column }}</span>
-                  </label>
-                }
+              @for (column of visibleComparableColumns(); track column) {
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    [checked]="isCompared(column)"
+                    (change)="toggleCompareColumn(column, $any($event.target).checked)"
+                  />
+                  <span>{{ column }}</span>
+                </label>
+              } @empty {
+                <p class="muted small">No column matches that filter.</p>
               }
             </div>
           </div>

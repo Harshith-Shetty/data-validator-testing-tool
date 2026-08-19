@@ -3,6 +3,8 @@ import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 
+import { ColumnPicker } from '../../shared/column-picker';
+
 import { Api } from '../../core/api';
 import {
   DELTA_MODE_LABELS,
@@ -22,7 +24,7 @@ interface UploadSlot {
 
 @Component({
   selector: 'app-test-detail',
-  imports: [FormsModule, RouterLink, DatePipe],
+  imports: [FormsModule, RouterLink, DatePipe, ColumnPicker],
   templateUrl: './test-detail.html',
   styleUrl: './test-detail.scss',
 })
@@ -40,6 +42,7 @@ export class TestDetail {
   readonly running = signal(false);
   readonly saving = signal(false);
   readonly dragRole = signal<FileRole | null>(null);
+  readonly columnFilter = signal('');
 
   readonly slots: UploadSlot[] = [
     {
@@ -68,6 +71,20 @@ export class TestDetail {
   });
 
   readonly deltaColumns = computed(() => this.test()?.datasets?.delta?.columns ?? []);
+
+  /** Data columns available to compare, minus the key and last-modified picks. */
+  readonly comparableColumns = computed(() => {
+    const config = this.config();
+    return this.dataColumns().filter(
+      (column) => column !== config?.key_columns[0] && column !== config?.last_modified_column,
+    );
+  });
+
+  readonly visibleComparableColumns = computed(() => {
+    const needle = this.columnFilter().trim().toLowerCase();
+    if (!needle) return this.comparableColumns();
+    return this.comparableColumns().filter((column) => column.toLowerCase().includes(needle));
+  });
 
   readonly ready = computed(() => {
     const datasets = this.test()?.datasets ?? {};
