@@ -147,27 +147,32 @@
           </div>
 
           <div>
-            <h3>What the delta file means</h3>
-            <div class="modes">
-              @for (mode of deltaModes; track mode) {
-                <label class="check">
-                  <input type="radio" name="mode" [value]="mode" [(ngModel)]="cfg.delta_value_mode" />
-                  <span>
-                    <strong>{{ mode.replace('_', ' ') }}</strong>
-                    <small>{{ modeLabels[mode] }}</small>
-                  </span>
-                </label>
-              }
-            </div>
+            <h3>Delta column → data column</h3>
+            <p class="muted small mapping-intro">
+              Each delta column sets the data column you pick here. Rows the feed re-sends
+              unchanged are expected to stay exactly as they are.
+            </p>
 
-            <h3 class="spaced">Delta column → data column</h3>
             @if (!payloadDeltaColumns().length) {
               <p class="muted small">
                 The delta file has no value columns beyond the key, so it only marks which rows
                 should have changed.
               </p>
             }
-            @for (deltaColumn of payloadDeltaColumns(); track deltaColumn) {
+            @if (payloadDeltaColumns().length > 6) {
+              <input
+                type="search"
+                class="column-filter"
+                placeholder="Search delta or data columns…"
+                [ngModel]="mappingFilter()"
+                (ngModelChange)="mappingFilter.set($event)"
+              />
+              <p class="muted small filter-count">
+                {{ visibleMappingColumns().length }} of {{ payloadDeltaColumns().length }} shown ·
+                {{ mappedCount() }} mapped
+              </p>
+            }
+            @for (deltaColumn of visibleMappingColumns(); track deltaColumn) {
               <div class="mapping-row">
                 <span class="mono">{{ deltaColumn }}</span>
                 <span class="arrow">→</span>
@@ -179,6 +184,10 @@
                   (valueChange)="setMapping(deltaColumn, $event)"
                 />
               </div>
+            } @empty {
+              @if (payloadDeltaColumns().length) {
+                <p class="muted small">No delta column matches that search.</p>
+              }
             }
           </div>
 
@@ -215,7 +224,7 @@
             <label class="check">
               <input type="checkbox" [(ngModel)]="cfg.strict_unlisted_columns" />
               <span>
-                Fail changes the delta did not ask for
+                Fail changes the feed did not ask for
                 <small>Off: those cells are flagged amber instead of red.</small>
               </span>
             </label>
@@ -231,8 +240,16 @@
               <span>Warn when last modified moves with no data change</span>
             </label>
             <label class="check">
-              <input type="checkbox" [(ngModel)]="cfg.flag_added_rows" />
-              <span>Fail rows that only exist in the current file</span>
+              <input type="checkbox" [(ngModel)]="cfg.allow_noop_timestamp_bump" />
+              <span>
+                Allow re-stamping records the feed re-sent unchanged
+                <span class="hint">Off: a record nothing needed to change should keep its
+                original last-modified value.</span>
+              </span>
+            </label>
+            <label class="check">
+              <input type="checkbox" [(ngModel)]="cfg.flag_unexpected_inserts" />
+              <span>Fail rows that appear with nothing in the feed asking for them</span>
             </label>
             <label class="check">
               <input type="checkbox" [(ngModel)]="cfg.flag_deleted_rows" />

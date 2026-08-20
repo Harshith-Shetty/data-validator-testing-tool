@@ -7,9 +7,7 @@ import { ColumnPicker } from '../../shared/column-picker';
 
 import { Api } from '../../core/api';
 import {
-  DELTA_MODE_LABELS,
   DatasetSummary,
-  DeltaValueMode,
   FileRole,
   RunSummary,
   TestConfig,
@@ -43,6 +41,7 @@ export class TestDetail {
   readonly saving = signal(false);
   readonly dragRole = signal<FileRole | null>(null);
   readonly columnFilter = signal('');
+  readonly mappingFilter = signal('');
 
   readonly slots: UploadSlot[] = [
     {
@@ -62,8 +61,6 @@ export class TestDetail {
     },
   ];
 
-  readonly deltaModes: DeltaValueMode[] = ['new_value', 'old_value', 'presence_only'];
-  readonly modeLabels = DELTA_MODE_LABELS;
 
   readonly dataColumns = computed(() => {
     const test = this.test();
@@ -209,6 +206,22 @@ export class TestDetail {
   payloadDeltaColumns(): string[] {
     const keys = new Set(this.config()?.delta_key_columns ?? []);
     return this.deltaColumns().filter((c) => !keys.has(c));
+  }
+
+  /** Mapping rows matching the search box, by delta column or by what it sets. */
+  visibleMappingColumns(): string[] {
+    const needle = this.mappingFilter().trim().toLowerCase();
+    const all = this.payloadDeltaColumns();
+    if (!needle) return all;
+    return all.filter(
+      (column) =>
+        column.toLowerCase().includes(needle) ||
+        this.mappingFor(column).toLowerCase().includes(needle),
+    );
+  }
+
+  mappedCount(): number {
+    return this.payloadDeltaColumns().filter((c) => !!this.mappingFor(c)).length;
   }
 
   saveConfig(): void {

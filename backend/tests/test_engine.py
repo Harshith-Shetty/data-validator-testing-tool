@@ -1,4 +1,8 @@
-"""Engine rules, driven from the worked example in the project README."""
+"""Engine rules under upsert semantics.
+
+The third file is a feed of records to apply, not a diff. A record in it may
+update, insert, or legitimately do nothing at all.
+"""
 
 from __future__ import annotations
 
@@ -16,36 +20,15 @@ def dataset(columns: list[str], rows: list[dict]) -> dict:
 DATA_COLUMNS = ["Id", "last modified", "att1"]
 
 
-@pytest.fixture
-def before() -> dict:
+def data(*rows: tuple[str, str, str]) -> dict:
     return dataset(
         DATA_COLUMNS,
-        [
-            {"Id": "1", "last modified": "2026-08-02 12:23:00", "att1": "uk"},
-            {"Id": "2", "last modified": "2026-05-01 15:56:00", "att1": "usa"},
-            {"Id": "3", "last modified": "2026-04-28 06:45:00", "att1": "Australia"},
-        ],
+        [{"Id": i, "last modified": ts, "att1": v} for i, ts, v in rows],
     )
 
 
-@pytest.fixture
-def after() -> dict:
-    return dataset(
-        DATA_COLUMNS,
-        [
-            {"Id": "1", "last modified": "2026-08-01 14:02:00", "att1": "india"},
-            {"Id": "2", "last modified": "2026-05-01 15:56:00", "att1": "usa"},
-            {"Id": "3", "last modified": "2026-08-01 14:02:00", "att1": "usa"},
-        ],
-    )
-
-
-@pytest.fixture
-def delta() -> dict:
-    return dataset(
-        ["Issuer", "country"],
-        [{"Issuer": "1", "country": "uk"}, {"Issuer": "3", "country": "usa"}],
-    )
+def feed(*rows: tuple[str, str]) -> dict:
+    return dataset(["Issuer", "country"], [{"Issuer": i, "country": v} for i, v in rows])
 
 
 @pytest.fixture
@@ -63,141 +46,243 @@ def rows_by_key(result: dict) -> dict[str, dict]:
     return {row["key"]: row for row in result["rows"]}
 
 
-def test_worked_example(before, after, delta, config):
-    result = run_validation(before, after, delta, config)
-    rows = rows_by_key(result)
+# --------------------------------------------------------------- the four outcomes
 
-    # Row 1: delta asked for 'uk', capture wrote 'india', and the timestamp went backwards.
-    assert rows["1"]["cells"]["att1"]["status"] == "FAIL"
-    assert rows["1"]["cells"]["att1"]["code"] == "WRONG_VALUE"
-    assert rows["1"]["cells"]["last modified"]["code"] == "TIMESTAMP_REGRESSED"
-    assert rows["1"]["rowStatus"] == "FAIL"
 
-    # Row 2: not in the delta and untouched -> everything green.
-    assert rows["2"]["cells"]["att1"]["status"] == "PASS"
-    assert rows["2"]["cells"]["last modified"]["status"] == "PASS"
+def test_update_noop_insert_and_missing_insert(config):
+    """One feed, every outcome it can produce."""
+    before = data(
+        ("1", "2026-01-01 10:00:00", "uk"),
+        ("2", "2026-01-01 10:00:00", "usa"),
+    )
+    after = data(
+        ("1", "2026-01-01 10:00:00", "uk"),  # no-op, correctly untouched
+        ("2", "2026-06-01 09:00:00", "france"),  # updated + stamped
+        ("3", "2026-06-01 09:00:00", "japan"),  # inserted
+    )
+    delta = feed(("1", "uk"), ("2", "france"), ("3", "japan"), ("4", "spain"))
+
+    rows = rows_by_key(run_validation(before, after, delta, config))
+
+    assert rows["1"]["rowType"] == "NOOP_EXPECTED"
+    assert rows["1"]["rowStatus"] == "PASS"
+    assert rows["1"]["cells"]["att1"]["code"] == "CORRECT_NOOP"
+    assert rows["1"]["cells"]["last modified"]["code"] == "TIMESTAMP_OK"
+
+    assert rows["2"]["rowType"] == "UPDATE_EXPECTED"
     assert rows["2"]["rowStatus"] == "PASS"
+    assert rows["2"]["cells"]["att1"]["code"] == "CORRECT_UPDATE"
 
-    # Row 3: updated to the requested value with a bumped timestamp.
-    assert rows["3"]["cells"]["att1"]["status"] == "PASS"
-    assert rows["3"]["cells"]["att1"]["code"] == "CORRECT_UPDATE"
-    assert rows["3"]["cells"]["last modified"]["status"] == "PASS"
+    assert rows["3"]["rowType"] == "INSERT_EXPECTED"
     assert rows["3"]["rowStatus"] == "PASS"
+    assert rows["3"]["cells"]["att1"]["code"] == "CORRECT_INSERT"
+    # An inserted row has no previous timestamp to compare against.
+    assert rows["3"]["cells"]["last modified"]["code"] == "NOT_EVALUATED"
 
-    summary = result["summary"]
-    assert summary["status"] == "FAIL"
-    assert (summary["rows_failed"], summary["rows_passed"]) == (1, 2)
-    assert summary["cells_failed"] == 2
-
-
-def test_missing_update_is_flagged(before, after, delta, config):
-    after["rows"][2]["att1"] = "Australia"  # capture never applied the change
-    after["rows"][2]["last modified"] = "2026-04-28 06:45:00"
-    result = run_validation(before, after, delta, config)
-    cell = rows_by_key(result)["3"]["cells"]["att1"]
-    assert (cell["status"], cell["code"]) == ("FAIL", "MISSING_UPDATE")
-    assert rows_by_key(result)["3"]["cells"]["last modified"]["code"] == "TIMESTAMP_NOT_UPDATED"
-
-
-def test_unexpected_change_is_flagged(before, after, delta, config):
-    after["rows"][1]["att1"] = "france"  # row 2 is not in the delta
-    result = run_validation(before, after, delta, config)
-    cell = rows_by_key(result)["2"]["cells"]["att1"]
-    assert (cell["status"], cell["code"]) == ("FAIL", "UNEXPECTED_CHANGE")
-
-
-def test_unexpected_change_downgraded_to_warning(before, after, delta, config):
-    config.strict_unlisted_columns = False
-    after["rows"][1]["att1"] = "france"
-    result = run_validation(before, after, delta, config)
-    assert rows_by_key(result)["2"]["cells"]["att1"]["status"] == "WARN"
-
-
-def test_timestamp_moved_without_data_change(before, after, delta, config):
-    after["rows"][1]["last modified"] = "2026-08-05 09:00:00"
-    result = run_validation(before, after, delta, config)
-    cell = rows_by_key(result)["2"]["cells"]["last modified"]
-    assert (cell["status"], cell["code"]) == ("WARN", "TIMESTAMP_MOVED_WITHOUT_CHANGE")
-    assert result["summary"]["status"] == "FAIL"  # row 1 still fails
-
-
-def test_added_and_deleted_rows(before, after, delta, config):
-    after["rows"].append({"Id": "4", "last modified": "2026-08-05 09:00:00", "att1": "japan"})
-    del before["rows"][1]
-    del after["rows"][1]
-    result = run_validation(before, after, delta, config)
-    rows = rows_by_key(result)
-    assert rows["4"]["rowType"] == "ADDED"
+    assert rows["4"]["rowType"] == "INSERT_EXPECTED"
     assert rows["4"]["rowStatus"] == "FAIL"
-    assert result["summary"]["issues_by_code"]["ROW_ADDED_IN_AFTER"] == 1
+    assert rows["4"]["cells"]["att1"]["code"] == "MISSING_INSERT"
 
 
-def test_deleted_row_detected(before, after, delta, config):
-    del after["rows"][1]
-    result = run_validation(before, after, delta, config)
-    assert rows_by_key(result)["2"]["rowType"] == "DELETED"
-    assert result["summary"]["issues_by_code"]["ROW_MISSING_IN_AFTER"] == 1
+def test_noop_must_not_be_restamped(config):
+    """Re-sending an identical record should not mark the record as modified."""
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-06-01 09:00:00", "uk"))  # value same, stamp moved
+    delta = feed(("1", "uk"))
+
+    row = rows_by_key(run_validation(before, after, delta, config))["1"]
+    assert row["cells"]["att1"]["code"] == "CORRECT_NOOP"
+    assert row["cells"]["last modified"]["code"] == "NOOP_TIMESTAMP_MOVED"
+    assert row["cells"]["last modified"]["status"] == "WARN"
+    assert row["rowStatus"] == "WARN"
 
 
-def test_delta_orphan(before, after, delta, config):
-    delta["rows"].append({"Issuer": "99", "country": "spain"})
-    result = run_validation(before, after, delta, config)
-    orphan = rows_by_key(result)["99"]
-    assert orphan["rowType"] == "DELTA_ORPHAN"
-    assert orphan["rowStatus"] == "FAIL"
+def test_noop_restamp_can_be_allowed(config):
+    """Systems that stamp every processed record can turn the warning off."""
+    config.allow_noop_timestamp_bump = True
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-06-01 09:00:00", "uk"))
+    delta = feed(("1", "uk"))
+
+    row = rows_by_key(run_validation(before, after, delta, config))["1"]
+    assert row["rowStatus"] == "PASS"
 
 
-def test_old_value_mode(before, after, delta, config):
-    """In old-value mode the delta carries the previous value, not the new one."""
-    config.delta_value_mode = "old_value"
-    result = run_validation(before, after, delta, config)
-    rows = rows_by_key(result)
-    # Row 1 moved away from 'uk', which is what the delta recorded -> correct.
-    assert rows["1"]["cells"]["att1"]["code"] == "CORRECT_UPDATE"
-    # Row 3's delta says the old value was 'usa' but the before file says 'Australia'.
-    assert rows["3"]["cells"]["att1"]["code"] == "DELTA_BEFORE_VALUE_MISMATCH"
-    assert rows["3"]["cells"]["att1"]["status"] == "WARN"
+def test_insert_with_the_wrong_value(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-01-01 10:00:00", "uk"), ("2", "2026-06-01 09:00:00", "brazil"))
+    delta = feed(("1", "uk"), ("2", "japan"))
+
+    row = rows_by_key(run_validation(before, after, delta, config))["2"]
+    assert row["cells"]["att1"]["code"] == "WRONG_INSERT_VALUE"
+    assert row["rowStatus"] == "FAIL"
 
 
-def test_presence_only_mode(before, after, delta, config):
-    config.delta_value_mode = "presence_only"
-    result = run_validation(before, after, delta, config)
-    rows = rows_by_key(result)
-    assert rows["1"]["cells"]["att1"]["status"] == "PASS"  # it changed; value not checked
-    assert rows["3"]["cells"]["att1"]["status"] == "PASS"
+def test_row_appearing_with_nothing_asking_for_it(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-01-01 10:00:00", "uk"), ("9", "2026-06-01 09:00:00", "peru"))
+    delta = feed(("1", "uk"))
+
+    row = rows_by_key(run_validation(before, after, delta, config))["9"]
+    assert row["rowType"] == "UNEXPECTED_INSERT"
+    assert row["rowStatus"] == "FAIL"
+
+    config.flag_unexpected_inserts = False
+    relaxed = rows_by_key(run_validation(before, after, delta, config))["9"]
+    assert relaxed["rowStatus"] == "PASS"
 
 
-def test_case_and_whitespace_insensitive_by_default(before, after, delta, config):
-    after["rows"][1]["att1"] = "  USA  "
-    result = run_validation(before, after, delta, config)
-    assert rows_by_key(result)["2"]["cells"]["att1"]["status"] == "PASS"
+# ------------------------------------------------------------------- update rules
+
+
+def test_update_that_never_landed(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-01-01 10:00:00", "uk"))
+    delta = feed(("1", "india"))
+
+    row = rows_by_key(run_validation(before, after, delta, config))["1"]
+    assert row["cells"]["att1"]["code"] == "MISSING_UPDATE"
+    assert row["cells"]["last modified"]["code"] == "TIMESTAMP_NOT_UPDATED"
+
+
+def test_update_that_landed_wrong(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-06-01 09:00:00", "brazil"))
+    delta = feed(("1", "india"))
+
+    cell = rows_by_key(run_validation(before, after, delta, config))["1"]["cells"]["att1"]
+    assert cell["code"] == "WRONG_VALUE"
+    assert cell["expected"] == "india"
+
+
+def test_value_moving_with_nothing_asking_for_it(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-06-01 09:00:00", "france"))
+    delta = feed()  # empty feed: nothing should have moved
+
+    row = rows_by_key(run_validation(before, after, delta, config))["1"]
+    assert row["rowType"] == "UNTOUCHED"
+    assert row["cells"]["att1"]["code"] == "UNEXPECTED_CHANGE"
+
+    config.strict_unlisted_columns = False
+    relaxed = rows_by_key(run_validation(before, after, delta, config))["1"]
+    assert relaxed["cells"]["att1"]["status"] == "WARN"
+
+
+def test_feed_resent_same_value_but_data_moved_anyway(config):
+    """The original worked example: feed says 'uk', record becomes 'india'."""
+    before = data(("1", "2026-08-02 12:23:00", "uk"))
+    after = data(("1", "2026-08-01 14:02:00", "india"))
+    delta = feed(("1", "uk"))
+
+    row = rows_by_key(run_validation(before, after, delta, config))["1"]
+    assert row["cells"]["att1"]["code"] == "UNEXPECTED_CHANGE"
+    assert row["cells"]["last modified"]["code"] == "TIMESTAMP_REGRESSED"
+    assert row["rowStatus"] == "FAIL"
+
+
+def test_deleted_row_is_flagged(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"), ("2", "2026-01-01 10:00:00", "usa"))
+    after = data(("1", "2026-01-01 10:00:00", "uk"))
+    delta = feed()
+
+    row = rows_by_key(run_validation(before, after, delta, config))["2"]
+    assert row["rowType"] == "DELETED"
+    assert row["cells"]["att1"]["code"] == "ROW_MISSING_IN_AFTER"
+    assert row["rowStatus"] == "FAIL"
+
+
+# ----------------------------------------------------------------- column handling
+
+
+def test_columns_the_feed_does_not_carry_must_stay_put(config):
+    columns = ["Id", "last modified", "att1", "att2"]
+    before = dataset(columns, [{"Id": "1", "last modified": "2026-01-01 10:00:00", "att1": "uk", "att2": "keep"}])
+    after = dataset(columns, [{"Id": "1", "last modified": "2026-06-01 09:00:00", "att1": "india", "att2": "moved"}])
+    config.compare_columns = ["att1", "att2"]
+    delta = feed(("1", "india"))
+
+    cells = rows_by_key(run_validation(before, after, delta, config))["1"]["cells"]
+    assert cells["att1"]["code"] == "CORRECT_UPDATE"
+    assert cells["att2"]["code"] == "UNEXPECTED_CHANGE"
+
+
+def test_inserted_row_columns_the_feed_cannot_speak_for(config):
+    columns = ["Id", "last modified", "att1", "att2"]
+    before = dataset(columns, [])
+    after = dataset(columns, [{"Id": "1", "last modified": "2026-06-01 09:00:00", "att1": "uk", "att2": "whatever"}])
+    config.compare_columns = ["att1", "att2"]
+    delta = feed(("1", "uk"))
+
+    cells = rows_by_key(run_validation(before, after, delta, config))["1"]["cells"]
+    assert cells["att1"]["code"] == "CORRECT_INSERT"
+    # Nothing in the three files says what att2 should hold on a new record.
+    assert cells["att2"]["code"] == "NOT_EVALUATED"
+    assert cells["att2"]["status"] == "INFO"
+
+
+def test_case_and_whitespace_insensitive_by_default(config):
+    before = data(("1", "2026-01-01 10:00:00", "usa"))
+    after = data(("1", "2026-01-01 10:00:00", "  USA  "))
+    delta = feed()
+
+    assert rows_by_key(run_validation(before, after, delta, config))["1"]["rowStatus"] == "PASS"
 
     config.case_sensitive = True
-    strict = run_validation(before, after, delta, config)
-    assert rows_by_key(strict)["2"]["cells"]["att1"]["code"] == "UNEXPECTED_CHANGE"
+    strict = rows_by_key(run_validation(before, after, delta, config))["1"]
+    assert strict["cells"]["att1"]["code"] == "UNEXPECTED_CHANGE"
 
 
 def test_numeric_values_compare_numerically(config):
     before = dataset(["Id", "amount"], [{"Id": "1", "amount": "10"}])
     after = dataset(["Id", "amount"], [{"Id": "1", "amount": "10.0"}])
-    delta = dataset(["Issuer", "country"], [])
     config.compare_columns = ["amount"]
     config.last_modified_column = None
-    result = run_validation(before, after, delta, config)
+    result = run_validation(before, after, feed(), config)
     assert rows_by_key(result)["1"]["cells"]["amount"]["status"] == "PASS"
 
 
-def test_key_columns_are_required(before, after, delta):
+def test_key_columns_are_required():
     with pytest.raises(ValidationError):
-        run_validation(before, after, delta, TestConfig())
+        run_validation(data(("1", "x", "y")), data(("1", "x", "y")), feed(), TestConfig())
 
 
-def test_suggest_config_matches_the_example(before, after, delta):
+# -------------------------------------------------------------------- the summary
+
+
+def test_summary_counts_and_overall_status(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"), ("2", "2026-01-01 10:00:00", "usa"))
+    after = data(("1", "2026-01-01 10:00:00", "uk"), ("2", "2026-01-01 10:00:00", "usa"))
+    delta = feed(("1", "uk"), ("2", "france"))  # row 2's update never landed
+
+    result = run_validation(before, after, delta, config)
+    summary = result["summary"]
+    assert summary["status"] == "FAIL"
+    assert summary["rows_passed"] == 1
+    assert summary["rows_failed"] == 1
+    assert summary["issues_by_code"]["MISSING_UPDATE"] == 1
+    assert summary["rows_by_type"] == {"NOOP_EXPECTED": 1, "UPDATE_EXPECTED": 1}
+
+
+def test_clean_run_passes(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-06-01 09:00:00", "india"), ("2", "2026-06-01 09:00:00", "japan"))
+    delta = feed(("1", "india"), ("2", "japan"))
+
+    summary = run_validation(before, after, delta, config)["summary"]
+    assert summary["status"] == "PASS"
+    assert summary["rows_failed"] == 0
+
+
+def test_suggest_config_still_maps_the_example():
+    before = data(("1", "2026-08-02 12:23:00", "uk"), ("2", "2026-05-01 15:56:00", "usa"))
+    after = data(("1", "2026-08-01 14:02:00", "india"), ("2", "2026-05-01 15:56:00", "usa"))
+    delta = feed(("1", "uk"))
+
     suggested = suggest_config(before, after, delta)
     assert suggested.key_columns == ["Id"]
     assert suggested.delta_key_columns == ["Issuer"]
     assert suggested.last_modified_column == "last modified"
-    assert suggested.compare_columns == ["att1"]
     assert [(m.delta_column, m.target_column) for m in suggested.delta_column_map] == [
         ("country", "att1")
     ]
