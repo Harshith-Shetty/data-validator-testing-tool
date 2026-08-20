@@ -72,8 +72,9 @@ export class TestDetail {
   /** Data columns available to compare, minus the key and last-modified picks. */
   readonly comparableColumns = computed(() => {
     const config = this.config();
+    const keys = new Set(config?.key_columns ?? []);
     return this.dataColumns().filter(
-      (column) => column !== config?.key_columns[0] && column !== config?.last_modified_column,
+      (column) => !keys.has(column) && column !== config?.last_modified_column,
     );
   });
 
@@ -180,22 +181,50 @@ export class TestDetail {
       : rest;
   }
 
-  keyColumn(): string {
-    return this.config()?.key_columns[0] ?? '';
-  }
-
-  deltaKeyColumn(): string {
-    return this.config()?.delta_key_columns[0] ?? '';
-  }
-
-  setKeyColumn(column: string): void {
+  /** Row matching is one or more column pairs, ANDed together. */
+  keyPairs(): { index: number; data: string; delta: string }[] {
     const config = this.config();
-    if (config) config.key_columns = [column];
+    if (!config) return [];
+    const count = Math.max(config.key_columns.length, config.delta_key_columns.length, 1);
+    return Array.from({ length: count }, (_, index) => ({
+      index,
+      data: config.key_columns[index] ?? '',
+      delta: config.delta_key_columns[index] ?? '',
+    }));
   }
 
-  setDeltaKeyColumn(column: string): void {
+  canRemoveKeyColumn(): boolean {
+    return this.keyPairs().length > 1;
+  }
+
+  setKeyColumnAt(index: number, column: string): void {
     const config = this.config();
-    if (config) config.delta_key_columns = [column];
+    if (!config) return;
+    const columns = [...config.key_columns];
+    columns[index] = column;
+    config.key_columns = columns;
+  }
+
+  setDeltaKeyColumnAt(index: number, column: string): void {
+    const config = this.config();
+    if (!config) return;
+    const columns = [...config.delta_key_columns];
+    columns[index] = column;
+    config.delta_key_columns = columns;
+  }
+
+  addKeyColumn(): void {
+    const config = this.config();
+    if (!config) return;
+    config.key_columns = [...config.key_columns, ''];
+    config.delta_key_columns = [...config.delta_key_columns, ''];
+  }
+
+  removeKeyColumnAt(index: number): void {
+    const config = this.config();
+    if (!config || config.key_columns.length <= 1) return;
+    config.key_columns = config.key_columns.filter((_, i) => i !== index);
+    config.delta_key_columns = config.delta_key_columns.filter((_, i) => i !== index);
   }
 
   setLastModified(column: string): void {

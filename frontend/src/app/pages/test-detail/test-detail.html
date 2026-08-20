@@ -116,23 +116,41 @@
         <div class="grid-2 config-grid">
           <div>
             <h3>Row matching</h3>
-            <div class="field">
-              <span>Key column (before / current)</span>
-              <app-column-picker
-                [options]="dataColumns()"
-                [value]="keyColumn()"
-                (valueChange)="setKeyColumn($event)"
-              />
-            </div>
-
-            <div class="field">
-              <span>Matching key column in the delta file</span>
-              <app-column-picker
-                [options]="deltaColumns()"
-                [value]="deltaKeyColumn()"
-                (valueChange)="setDeltaKeyColumn($event)"
-              />
-            </div>
+            @if (keyPairs().length > 1) {
+              <p class="muted small mapping-intro">
+                All conditions below must match (AND) to line up a row.
+              </p>
+            }
+            @for (pair of keyPairs(); track pair.index) {
+              <div class="key-pair-row">
+                <app-column-picker
+                  [options]="dataColumns()"
+                  [value]="pair.data"
+                  placeholder="Before / current column"
+                  (valueChange)="setKeyColumnAt(pair.index, $event)"
+                />
+                <span class="arrow">↔</span>
+                <app-column-picker
+                  [options]="deltaColumns()"
+                  [value]="pair.delta"
+                  placeholder="Delta column"
+                  (valueChange)="setDeltaKeyColumnAt(pair.index, $event)"
+                />
+                @if (canRemoveKeyColumn()) {
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    title="Remove this matching condition"
+                    (click)="removeKeyColumnAt(pair.index)"
+                  >
+                    ✕
+                  </button>
+                }
+              </div>
+            }
+            <button type="button" class="small add-key-btn" (click)="addKeyColumn()">
+              + Add another matching column
+            </button>
 
             <div class="field">
               <span>Last modified column (optional)</span>
