@@ -1,22 +1,30 @@
 """Data capture validation engine.
 
-Given three datasets — the state *before* a capture run, the *current* state
-after it, and the *delta* describing what was supposed to change — the engine
-answers one question per cell: was this cell changed the way it should have
-been?
+The third file is not a diff — it is an **upsert feed**: a set of records that
+were handed to the capture run to apply. A row appearing in it does not mean
+the data had to change. Applying record ``{id: 7, country: uk}`` to a record
+that already says ``uk`` is a legitimate no-op; applying it to a key that does
+not exist yet is an insert.
+
+So the engine does not ask "did this row change?". It builds the state the
+current file *should* be in::
+
+    expected = before, with every delta record applied as an upsert
+
+and compares the actual current file against that. Update, no-op and insert
+then fall out of one rule instead of needing three.
 
 Cell verdicts
 -------------
-PASS  the cell is exactly where it should be (correctly updated, or correctly
-      left alone)
-FAIL  the cell is wrong (an expected update did not land, landed with the wrong
-      value, or a value moved that nobody asked to move)
-WARN  suspicious but not provably wrong (e.g. the delta's "before" value does
-      not match the before file)
-INFO  not evaluated (key columns, columns absent from one of the files)
+PASS  the cell holds the value it should
+FAIL  the cell is wrong (update never landed, landed wrong, insert missing, or
+      a value moved that the feed never asked to move)
+WARN  suspicious but not provably wrong
+INFO  not evaluated (key columns, or an inserted row's unmapped columns, whose
+      correct value nothing in the three files can tell us)
 
-A row's verdict is the worst verdict among its cells, and the run's verdict is
-the worst verdict among its rows.
+A row's verdict is the worst among its cells; the run's is the worst among its
+rows.
 """
 
 from __future__ import annotations
@@ -40,14 +48,14 @@ class ValidationError(ValueError):
 
 def _index_rows(
     rows: list[dict[str, Any]], key_columns: list[str], *, case_sensitive: bool
-) -> tuple[dict[str, dict[str, Any]], list[str]]:
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Index rows by key, reporting keys that appear more than once."""
     index: dict[str, dict[str, Any]] = {}
-    duplicates: list[str] = []
+    duplicates: set[str] = set()
     for row in rows:
         key = key_of(row, key_columns, case_sensitive=case_sensitive)
         if key in index:
-            duplicates.append(key)
+            duplicates.add(key)
             continue  # first occurrence wins
         index[key] = row
     return index, duplicates
@@ -75,12 +83,14 @@ def _cell(
     status: CellStatus,
     code: RuleCode,
     message: str = "",
+    *,
+    has_expected: bool = True,
 ) -> dict[str, Any]:
     return {
         "column": column,
         "before": display(before),
         "after": display(after),
-        "expected": None if expected is None else display(expected),
+        "expected": display(expected) if has_expected else None,
         "changed": display(before) != display(after),
         "status": status.value,
         "code": code.value,
@@ -104,24 +114,27 @@ def run_validation(
         raise ValidationError("Delta key columns must line up one-to-one with the key columns.")
 
     cs = config.case_sensitive
-    eq = lambda a, b: values_equal(  # noqa: E731 - local shorthand keeps the rules readable
-        a,
-        b,
-        trim=config.trim_whitespace,
-        case_sensitive=cs,
-        numeric_tolerance=config.numeric_tolerance,
-    )
 
-    before_rows, after_rows, delta_rows = before["rows"], after["rows"], delta["rows"]
-    before_index, before_dupes = _index_rows(before_rows, config.key_columns, case_sensitive=cs)
-    after_index, after_dupes = _index_rows(after_rows, config.key_columns, case_sensitive=cs)
-    delta_index, delta_dupes = _index_rows(delta_rows, delta_keys, case_sensitive=cs)
+    def eq(a: Any, b: Any) -> bool:
+        return values_equal(
+            a,
+            b,
+            trim=config.trim_whitespace,
+            case_sensitive=cs,
+            numeric_tolerance=config.numeric_tolerance,
+        )
+
+    before_index, before_dupes = _index_rows(before["rows"], config.key_columns, case_sensitive=cs)
+    after_index, after_dupes = _index_rows(after["rows"], config.key_columns, case_sensitive=cs)
+    delta_index, delta_dupes = _index_rows(delta["rows"], delta_keys, case_sensitive=cs)
 
     compare_columns = _resolve_compare_columns(config, before["columns"], after["columns"])
-    mapping = config.mapping_dict()
-    # Delta columns that carry a payload (everything that is not part of the key).
-    mapped_targets = {
-        target for source, target in mapping.items() if source not in delta_keys and target
+
+    # data column -> the delta column that sets it
+    setters: dict[str, str] = {
+        target: source
+        for source, target in config.mapping_dict().items()
+        if source not in delta_keys and target
     }
 
     grid_columns = list(config.key_columns) + compare_columns
@@ -135,326 +148,276 @@ def run_validation(
     def bump(counter: dict[str, int], code: str) -> None:
         counter[code] = counter.get(code, 0) + 1
 
-    all_keys = list(dict.fromkeys(list(before_index) + list(after_index)))
+    all_keys = list(dict.fromkeys(list(before_index) + list(after_index) + list(delta_index)))
 
     for key in all_keys:
         before_row = before_index.get(key)
         after_row = after_index.get(key)
         delta_row = delta_index.get(key)
 
-        if before_row is None:
-            row_type = RowType.ADDED
-        elif after_row is None:
-            row_type = RowType.DELETED
-        elif delta_row is not None:
-            row_type = RowType.EXPECTED_CHANGE
-        else:
-            row_type = RowType.NO_CHANGE_EXPECTED
-
         cells: dict[str, dict[str, Any]] = {}
         messages: list[str] = []
-        source = after_row if after_row is not None else before_row
 
-        for column in config.key_columns:
+        # --- what does the feed say should be true of this row? ------------------
+        if before_row is not None:
+            # Applying the delta record produces the expected state.
+            expected_row = {c: before_row.get(c) for c in compare_columns}
+            wants_change = False
+            for column, source in setters.items():
+                if delta_row is not None and column in compare_columns:
+                    expected_row[column] = delta_row.get(source)
+                    if not eq(before_row.get(column), delta_row.get(source)):
+                        wants_change = True
+            if delta_row is None:
+                row_type = RowType.UNTOUCHED
+            else:
+                row_type = RowType.UPDATE_EXPECTED if wants_change else RowType.NOOP_EXPECTED
+        else:
+            expected_row = {
+                column: (delta_row.get(source) if delta_row is not None else None)
+                for column, source in setters.items()
+                if column in compare_columns
+            }
+            wants_change = True
+            row_type = RowType.INSERT_EXPECTED if delta_row is not None else RowType.UNEXPECTED_INSERT
+
+        if after_row is None and before_row is not None:
+            row_type = RowType.DELETED
+
+        source_row = after_row or before_row or {}
+        for index, column in enumerate(config.key_columns):
+            value = source_row.get(column)
+            if not value and delta_row is not None:
+                value = delta_row.get(delta_keys[index])
             cells[column] = _cell(
-                column, source.get(column), source.get(column), None, CellStatus.INFO, RuleCode.KEY
+                column, value, value, None, CellStatus.INFO, RuleCode.KEY, has_expected=False
             )
 
-        # ------------------------------------------------ rows that only exist on one side
-        if row_type in (RowType.ADDED, RowType.DELETED):
-            missing_code = (
-                RuleCode.ROW_ADDED_IN_AFTER
-                if row_type is RowType.ADDED
-                else RuleCode.ROW_MISSING_IN_AFTER
-            )
-            flagged = (
-                config.flag_added_rows if row_type is RowType.ADDED else config.flag_deleted_rows
-            )
-            status = CellStatus.FAIL if flagged else CellStatus.INFO
-            note = (
-                "Row is in the current file but not in the before file."
-                if row_type is RowType.ADDED
-                else "Row is in the before file but missing from the current file."
-            )
+        # --- rows that never arrived ---------------------------------------------
+        if after_row is None:
+            if row_type is RowType.DELETED:
+                code = RuleCode.ROW_MISSING_IN_AFTER
+                note = "Row is in the before file but missing from the current file."
+                status = CellStatus.FAIL if config.flag_deleted_rows else CellStatus.INFO
+            else:
+                code = RuleCode.MISSING_INSERT
+                note = "The feed carries this record but it was never inserted."
+                status = CellStatus.FAIL
             messages.append(note)
-            bump(issues, missing_code.value)
-            for column in compare_columns + (
-                [config.last_modified_column] if config.last_modified_column else []
-            ):
+            bump(issues, code.value)
+            for column in grid_columns:
+                if column in config.key_columns:
+                    continue
                 cells[column] = _cell(
                     column,
                     (before_row or {}).get(column),
-                    (after_row or {}).get(column),
                     None,
+                    expected_row.get(column),
                     status,
-                    missing_code,
+                    code,
                     note,
+                    has_expected=column in expected_row,
                 )
             bump(rows_by_type, row_type.value)
-            results.append(
-                {
-                    "key": key,
-                    "rowType": row_type.value,
-                    "rowStatus": _worst([CellStatus(c["status"]) for c in cells.values()]).value,
-                    "cells": cells,
-                    "messages": messages,
-                }
-            )
+            results.append(_row(key, row_type, cells, messages))
             continue
 
-        # -------------------------------------------------------------- data columns
-        data_changed = False
-        for column in compare_columns:
-            b_val, a_val = before_row.get(column), after_row.get(column)
-            changed = not eq(b_val, a_val)
-            data_changed = data_changed or changed
-            is_targeted = row_type is RowType.EXPECTED_CHANGE and column in mapped_targets
+        # --- a row nobody asked for ----------------------------------------------
+        if row_type is RowType.UNEXPECTED_INSERT:
+            note = "Row is in the current file but in neither the before file nor the feed."
+            status = CellStatus.FAIL if config.flag_unexpected_inserts else CellStatus.INFO
+            messages.append(note)
+            bump(issues, RuleCode.UNEXPECTED_INSERT.value)
+            for column in grid_columns:
+                if column in config.key_columns:
+                    continue
+                cells[column] = _cell(
+                    column,
+                    None,
+                    after_row.get(column),
+                    None,
+                    status,
+                    RuleCode.UNEXPECTED_INSERT,
+                    note,
+                    has_expected=False,
+                )
+            bump(rows_by_type, row_type.value)
+            results.append(_row(key, row_type, cells, messages))
+            continue
 
-            if is_targeted:
-                delta_source = next(
-                    src for src, tgt in mapping.items() if tgt == column and src not in delta_keys
-                )
-                delta_value = delta_row.get(delta_source)
-                cells[column] = _evaluate_expected_change(
-                    column, b_val, a_val, delta_value, changed, config, eq
-                )
-            elif row_type is RowType.EXPECTED_CHANGE and not mapped_targets:
-                # No delta payload mapped at all: the delta only says "this row
-                # should have moved", so any change in any column counts.
+        # --- compare against the expected state ----------------------------------
+        for column in compare_columns:
+            actual = after_row.get(column)
+
+            if row_type is RowType.INSERT_EXPECTED:
+                if column not in expected_row:
+                    # Nothing in the three files says what this column should hold.
+                    cells[column] = _cell(
+                        column,
+                        None,
+                        actual,
+                        None,
+                        CellStatus.INFO,
+                        RuleCode.NOT_EVALUATED,
+                        "Inserted row; the feed does not carry this column.",
+                        has_expected=False,
+                    )
+                    continue
+                expected = expected_row[column]
                 cells[column] = (
                     _cell(
                         column,
-                        b_val,
-                        a_val,
                         None,
+                        actual,
+                        expected,
                         CellStatus.PASS,
-                        RuleCode.CORRECT_UPDATE,
-                        "Value was updated as the delta requires.",
+                        RuleCode.CORRECT_INSERT,
+                        "Inserted with the value the feed carries.",
                     )
-                    if changed
+                    if eq(actual, expected)
                     else _cell(
                         column,
-                        b_val,
-                        a_val,
                         None,
-                        CellStatus.INFO,
-                        RuleCode.CORRECT_UNCHANGED,
-                        "",
+                        actual,
+                        expected,
+                        CellStatus.FAIL,
+                        RuleCode.WRONG_INSERT_VALUE,
+                        f"Feed carries '{display(expected)}' but the inserted row holds "
+                        f"'{display(actual)}'.",
                     )
                 )
-            elif changed:
-                status = CellStatus.FAIL if config.strict_unlisted_columns else CellStatus.WARN
-                note = (
-                    "Value changed but the delta file does not ask for this change."
-                    if row_type is RowType.NO_CHANGE_EXPECTED
-                    else "Value changed but the delta file only lists other columns for this row."
-                )
+                continue
+
+            original = before_row.get(column)
+            expected = expected_row.get(column, original)
+            set_by_feed = column in setters and delta_row is not None
+            feed_wants_change = set_by_feed and not eq(original, expected)
+
+            if eq(actual, expected):
+                if feed_wants_change:
+                    code, note = (
+                        RuleCode.CORRECT_UPDATE,
+                        "Updated to the value the feed carries.",
+                    )
+                elif set_by_feed:
+                    code, note = (
+                        RuleCode.CORRECT_NOOP,
+                        "Feed re-sent the value the record already held; correctly left alone.",
+                    )
+                else:
+                    code, note = (RuleCode.CORRECT_UNCHANGED, "Value correctly left unchanged.")
                 cells[column] = _cell(
-                    column, b_val, a_val, b_val, status, RuleCode.UNEXPECTED_CHANGE, note
+                    column, original, actual, expected, CellStatus.PASS, code, note
                 )
-            else:
+                continue
+
+            # Wrong. Which flavour of wrong?
+            if feed_wants_change and eq(actual, original):
                 cells[column] = _cell(
                     column,
-                    b_val,
-                    a_val,
-                    None,
-                    CellStatus.PASS,
-                    RuleCode.CORRECT_UNCHANGED,
-                    "Value correctly left unchanged.",
+                    original,
+                    actual,
+                    expected,
+                    CellStatus.FAIL,
+                    RuleCode.MISSING_UPDATE,
+                    f"Feed carries '{display(expected)}' but the value is still "
+                    f"'{display(original)}'.",
+                )
+            elif feed_wants_change:
+                cells[column] = _cell(
+                    column,
+                    original,
+                    actual,
+                    expected,
+                    CellStatus.FAIL,
+                    RuleCode.WRONG_VALUE,
+                    f"Feed carries '{display(expected)}' but the value is now "
+                    f"'{display(actual)}'.",
+                )
+            else:
+                status = CellStatus.FAIL if config.strict_unlisted_columns else CellStatus.WARN
+                note = (
+                    "Value changed but the feed re-sent the same value for this column."
+                    if set_by_feed
+                    else "Value changed but nothing in the feed asks for this change."
+                )
+                cells[column] = _cell(
+                    column, original, actual, expected, status, RuleCode.UNEXPECTED_CHANGE, note
                 )
 
-        # ---------------------------------------------------------- last modified column
-        if config.last_modified_column and config.check_timestamp:
-            cells[config.last_modified_column] = _evaluate_timestamp(
-                config.last_modified_column,
-                before_row.get(config.last_modified_column),
-                after_row.get(config.last_modified_column),
-                should_have_changed=row_type is RowType.EXPECTED_CHANGE or data_changed,
-                config=config,
-                eq=eq,
-            )
-        elif config.last_modified_column:
+        # --- last modified --------------------------------------------------------
+        if config.last_modified_column:
             column = config.last_modified_column
-            cells[column] = _cell(
-                column,
-                before_row.get(column),
-                after_row.get(column),
-                None,
-                CellStatus.INFO,
-                RuleCode.TIMESTAMP_OK,
-            )
+            if not config.check_timestamp:
+                cells[column] = _cell(
+                    column,
+                    (before_row or {}).get(column),
+                    after_row.get(column),
+                    None,
+                    CellStatus.INFO,
+                    RuleCode.NOT_EVALUATED,
+                    has_expected=False,
+                )
+            elif row_type is RowType.INSERT_EXPECTED:
+                cells[column] = _cell(
+                    column,
+                    None,
+                    after_row.get(column),
+                    None,
+                    CellStatus.INFO,
+                    RuleCode.NOT_EVALUATED,
+                    "Inserted row; there is no previous timestamp to compare against.",
+                    has_expected=False,
+                )
+            else:
+                data_changed = any(
+                    not eq(before_row.get(name), after_row.get(name))
+                    for name in compare_columns
+                )
+                cells[column] = _evaluate_timestamp(
+                    column,
+                    before_row.get(column),
+                    after_row.get(column),
+                    row_type=row_type,
+                    data_changed=data_changed,
+                    config=config,
+                    eq=eq,
+                )
 
         if key in before_dupes or key in after_dupes or key in delta_dupes:
             messages.append("Key appears more than once; only the first occurrence was compared.")
             bump(issues, RuleCode.DUPLICATE_KEY.value)
 
         for cell in cells.values():
-            if cell["code"] not in (RuleCode.KEY.value,) and cell["status"] in (
+            if cell["code"] != RuleCode.KEY.value and cell["status"] in (
                 CellStatus.FAIL.value,
                 CellStatus.WARN.value,
             ):
                 bump(issues, cell["code"])
-            if cell["message"] and cell["message"] not in messages and cell["status"] == "FAIL":
-                messages.append(f"{cell['column']}: {cell['message']}")
+            if cell["message"] and cell["status"] == CellStatus.FAIL.value:
+                note = f"{cell['column']}: {cell['message']}"
+                if note not in messages:
+                    messages.append(note)
 
         bump(rows_by_type, row_type.value)
-        results.append(
-            {
-                "key": key,
-                "rowType": row_type.value,
-                "rowStatus": _worst([CellStatus(c["status"]) for c in cells.values()]).value,
-                "cells": cells,
-                "messages": messages,
-            }
-        )
-
-    # -------------------------------------------------- delta rows matching nothing at all
-    for key, delta_row in delta_index.items():
-        if key in before_index or key in after_index:
-            continue
-        note = "Delta row refers to a key that exists in neither the before nor the current file."
-        cells = {
-            column: _cell(
-                column,
-                None,
-                None,
-                delta_row.get(src) if (src := _source_for(mapping, delta_keys, column)) else None,
-                CellStatus.FAIL,
-                RuleCode.DELTA_KEY_NOT_FOUND,
-                note,
-            )
-            for column in grid_columns
-        }
-        for idx, column in enumerate(config.key_columns):
-            cells[column] = _cell(
-                column,
-                None,
-                delta_row.get(delta_keys[idx]),
-                None,
-                CellStatus.FAIL,
-                RuleCode.DELTA_KEY_NOT_FOUND,
-                note,
-            )
-        bump(issues, RuleCode.DELTA_KEY_NOT_FOUND.value)
-        bump(rows_by_type, RowType.DELTA_ORPHAN.value)
-        results.append(
-            {
-                "key": key,
-                "rowType": RowType.DELTA_ORPHAN.value,
-                "rowStatus": CellStatus.FAIL.value,
-                "cells": cells,
-                "messages": [note],
-            }
-        )
+        results.append(_row(key, row_type, cells, messages))
 
     summary = _summarise(results, grid_columns, config, issues, rows_by_type, started, started_at)
     return {"summary": summary, "rows": results, "columns": grid_columns}
 
 
-def _source_for(mapping: dict[str, str], delta_keys: list[str], column: str) -> str | None:
-    for src, tgt in mapping.items():
-        if tgt == column and src not in delta_keys:
-            return src
-    return None
-
-
-def _evaluate_expected_change(
-    column: str,
-    before_value: Any,
-    after_value: Any,
-    delta_value: Any,
-    changed: bool,
-    config: TestConfig,
-    eq,
+def _row(
+    key: str, row_type: RowType, cells: dict[str, dict[str, Any]], messages: list[str]
 ) -> dict[str, Any]:
-    """Rules for a cell the delta file explicitly asks to change."""
-
-    if config.delta_value_mode == "new_value":
-        if eq(after_value, delta_value):
-            return _cell(
-                column,
-                before_value,
-                after_value,
-                delta_value,
-                CellStatus.PASS,
-                RuleCode.CORRECT_UPDATE,
-                "Updated to the value requested by the delta file.",
-            )
-        if not changed:
-            return _cell(
-                column,
-                before_value,
-                after_value,
-                delta_value,
-                CellStatus.FAIL,
-                RuleCode.MISSING_UPDATE,
-                f"Delta asks for '{display(delta_value)}' but the value is still "
-                f"'{display(before_value)}'.",
-            )
-        return _cell(
-            column,
-            before_value,
-            after_value,
-            delta_value,
-            CellStatus.FAIL,
-            RuleCode.WRONG_VALUE,
-            f"Delta asks for '{display(delta_value)}' but the value is now "
-            f"'{display(after_value)}'.",
-        )
-
-    if config.delta_value_mode == "old_value":
-        if not changed:
-            return _cell(
-                column,
-                before_value,
-                after_value,
-                None,
-                CellStatus.FAIL,
-                RuleCode.MISSING_UPDATE,
-                "Delta lists this cell as changed but it still holds its previous value.",
-            )
-        if not eq(before_value, delta_value):
-            return _cell(
-                column,
-                before_value,
-                after_value,
-                delta_value,
-                CellStatus.WARN,
-                RuleCode.DELTA_BEFORE_VALUE_MISMATCH,
-                f"Value was updated, but the delta's previous value "
-                f"'{display(delta_value)}' does not match the before file "
-                f"'{display(before_value)}'.",
-            )
-        return _cell(
-            column,
-            before_value,
-            after_value,
-            None,
-            CellStatus.PASS,
-            RuleCode.CORRECT_UPDATE,
-            "Updated away from the previous value recorded in the delta file.",
-        )
-
-    # presence_only
-    if changed:
-        return _cell(
-            column,
-            before_value,
-            after_value,
-            None,
-            CellStatus.PASS,
-            RuleCode.CORRECT_UPDATE,
-            "Value was updated as the delta requires.",
-        )
-    return _cell(
-        column,
-        before_value,
-        after_value,
-        None,
-        CellStatus.FAIL,
-        RuleCode.MISSING_UPDATE,
-        "Delta lists this cell as changed but the value is unchanged.",
-    )
+    worst = _worst([CellStatus(c["status"]) for c in cells.values()])
+    # Nothing to report is a pass; INFO is a cell-level state, not a row verdict.
+    return {
+        "key": key,
+        "rowType": row_type.value,
+        "rowStatus": (CellStatus.PASS if worst is CellStatus.INFO else worst).value,
+        "cells": cells,
+        "messages": messages,
+    }
 
 
 def _evaluate_timestamp(
@@ -462,16 +425,19 @@ def _evaluate_timestamp(
     before_value: Any,
     after_value: Any,
     *,
-    should_have_changed: bool,
+    row_type: RowType,
+    data_changed: bool,
     config: TestConfig,
     eq,
 ) -> dict[str, Any]:
+    """A record that genuinely changed must be stamped; one that did not, must not."""
+
+    should_have_moved = row_type is RowType.UPDATE_EXPECTED or data_changed
     before_ts = parse_timestamp(before_value)
     after_ts = parse_timestamp(after_value)
 
     if before_ts is None or after_ts is None:
-        equal = eq(before_value, after_value)
-        if should_have_changed and equal:
+        if should_have_moved and eq(before_value, after_value):
             return _cell(
                 column,
                 before_value,
@@ -480,6 +446,7 @@ def _evaluate_timestamp(
                 CellStatus.FAIL,
                 RuleCode.TIMESTAMP_NOT_UPDATED,
                 "Row changed but the last-modified value did not.",
+                has_expected=False,
             )
         return _cell(
             column,
@@ -489,9 +456,10 @@ def _evaluate_timestamp(
             CellStatus.WARN,
             RuleCode.TIMESTAMP_UNPARSEABLE,
             "Last-modified value could not be read as a date/time.",
+            has_expected=False,
         )
 
-    if should_have_changed:
+    if should_have_moved:
         if after_ts > before_ts:
             return _cell(
                 column,
@@ -501,6 +469,7 @@ def _evaluate_timestamp(
                 CellStatus.PASS,
                 RuleCode.TIMESTAMP_OK,
                 "Last-modified moved forward with the change.",
+                has_expected=False,
             )
         if after_ts == before_ts:
             return _cell(
@@ -511,6 +480,7 @@ def _evaluate_timestamp(
                 CellStatus.FAIL,
                 RuleCode.TIMESTAMP_NOT_UPDATED,
                 "Row changed but last-modified was not bumped.",
+                has_expected=False,
             )
         return _cell(
             column,
@@ -520,6 +490,7 @@ def _evaluate_timestamp(
             CellStatus.FAIL,
             RuleCode.TIMESTAMP_REGRESSED,
             f"Last-modified went backwards ({display(before_value)} -> {display(after_value)}).",
+            has_expected=False,
         )
 
     if after_ts == before_ts:
@@ -530,8 +501,34 @@ def _evaluate_timestamp(
             None,
             CellStatus.PASS,
             RuleCode.TIMESTAMP_OK,
-            "Row did not change and last-modified stayed put.",
+            "Nothing needed to change and last-modified stayed put.",
+            has_expected=False,
         )
+
+    # The value moved without the record needing to change.
+    if row_type is RowType.NOOP_EXPECTED:
+        if config.allow_noop_timestamp_bump:
+            return _cell(
+                column,
+                before_value,
+                after_value,
+                None,
+                CellStatus.INFO,
+                RuleCode.NOOP_TIMESTAMP_MOVED,
+                "Feed re-sent this record unchanged; the stamp moved, which is allowed here.",
+                has_expected=False,
+            )
+        return _cell(
+            column,
+            before_value,
+            after_value,
+            None,
+            CellStatus.WARN,
+            RuleCode.NOOP_TIMESTAMP_MOVED,
+            "Feed re-sent this record unchanged, but the record was stamped as modified.",
+            has_expected=False,
+        )
+
     status = CellStatus.WARN if config.flag_timestamp_without_change else CellStatus.INFO
     return _cell(
         column,
@@ -541,6 +538,7 @@ def _evaluate_timestamp(
         status,
         RuleCode.TIMESTAMP_MOVED_WITHOUT_CHANGE,
         "Last-modified moved even though no data changed.",
+        has_expected=False,
     )
 
 

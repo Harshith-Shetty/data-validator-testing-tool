@@ -29,33 +29,44 @@ class CellStatus(str, Enum):
 
 
 class RowType(str, Enum):
-    EXPECTED_CHANGE = "EXPECTED_CHANGE"  # key present in the delta file
-    NO_CHANGE_EXPECTED = "NO_CHANGE_EXPECTED"  # key absent from the delta file
-    ADDED = "ADDED"  # only in the current file
-    DELETED = "DELETED"  # only in the before file
-    DELTA_ORPHAN = "DELTA_ORPHAN"  # delta row whose key is in neither dataset
+    """What the delta file implies should have happened to this row."""
+
+    UPDATE_EXPECTED = "UPDATE_EXPECTED"  # delta carries values that differ from before
+    NOOP_EXPECTED = "NOOP_EXPECTED"  # delta restates what the row already held
+    INSERT_EXPECTED = "INSERT_EXPECTED"  # delta key is new to the data
+    UNTOUCHED = "UNTOUCHED"  # delta says nothing about this row
+    UNEXPECTED_INSERT = "UNEXPECTED_INSERT"  # row appeared with nothing asking for it
+    DELETED = "DELETED"  # row vanished from the current file
 
 
 class RuleCode(str, Enum):
+    # Passing
     CORRECT_UPDATE = "CORRECT_UPDATE"
+    CORRECT_NOOP = "CORRECT_NOOP"
     CORRECT_UNCHANGED = "CORRECT_UNCHANGED"
+    CORRECT_INSERT = "CORRECT_INSERT"
+    TIMESTAMP_OK = "TIMESTAMP_OK"
+
+    # Failing
     MISSING_UPDATE = "MISSING_UPDATE"
     WRONG_VALUE = "WRONG_VALUE"
     UNEXPECTED_CHANGE = "UNEXPECTED_CHANGE"
-    DELTA_BEFORE_VALUE_MISMATCH = "DELTA_BEFORE_VALUE_MISMATCH"
-    TIMESTAMP_OK = "TIMESTAMP_OK"
+    MISSING_INSERT = "MISSING_INSERT"
+    WRONG_INSERT_VALUE = "WRONG_INSERT_VALUE"
+    UNEXPECTED_INSERT = "UNEXPECTED_INSERT"
+    ROW_MISSING_IN_AFTER = "ROW_MISSING_IN_AFTER"
     TIMESTAMP_NOT_UPDATED = "TIMESTAMP_NOT_UPDATED"
     TIMESTAMP_REGRESSED = "TIMESTAMP_REGRESSED"
+
+    # Suspicious
+    NOOP_TIMESTAMP_MOVED = "NOOP_TIMESTAMP_MOVED"
     TIMESTAMP_MOVED_WITHOUT_CHANGE = "TIMESTAMP_MOVED_WITHOUT_CHANGE"
     TIMESTAMP_UNPARSEABLE = "TIMESTAMP_UNPARSEABLE"
-    ROW_MISSING_IN_AFTER = "ROW_MISSING_IN_AFTER"
-    ROW_ADDED_IN_AFTER = "ROW_ADDED_IN_AFTER"
-    DELTA_KEY_NOT_FOUND = "DELTA_KEY_NOT_FOUND"
     DUPLICATE_KEY = "DUPLICATE_KEY"
+
+    # Informational
     KEY = "KEY"
-
-
-DeltaValueMode = Literal["new_value", "old_value", "presence_only"]
+    NOT_EVALUATED = "NOT_EVALUATED"
 
 
 class ColumnMapping(BaseModel):
@@ -78,9 +89,8 @@ class TestConfig(BaseModel):
     # Optional "last modified" column that must move when a row changes.
     last_modified_column: str | None = None
 
-    # Delta payload semantics.
+    # Which delta columns carry values, and which data column each one sets.
     delta_column_map: list[ColumnMapping] = Field(default_factory=list)
-    delta_value_mode: DeltaValueMode = "new_value"
 
     # Comparison behaviour.
     case_sensitive: bool = False
@@ -90,8 +100,10 @@ class TestConfig(BaseModel):
     # Rule toggles.
     strict_unlisted_columns: bool = True
     check_timestamp: bool = True
+    # A record the feed re-sent unchanged should not have been touched at all.
+    allow_noop_timestamp_bump: bool = False
     flag_timestamp_without_change: bool = True
-    flag_added_rows: bool = True
+    flag_unexpected_inserts: bool = True
     flag_deleted_rows: bool = True
 
     def mapping_dict(self) -> dict[str, str]:

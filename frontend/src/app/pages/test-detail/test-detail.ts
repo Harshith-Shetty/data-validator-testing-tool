@@ -3,11 +3,11 @@ import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 
+import { ColumnPicker } from '../../shared/column-picker';
+
 import { Api } from '../../core/api';
 import {
-  DELTA_MODE_LABELS,
   DatasetSummary,
-  DeltaValueMode,
   FileRole,
   RunSummary,
   TestConfig,
@@ -22,7 +22,7 @@ interface UploadSlot {
 
 @Component({
   selector: 'app-test-detail',
-  imports: [FormsModule, RouterLink, DatePipe],
+  imports: [FormsModule, RouterLink, DatePipe, ColumnPicker],
   templateUrl: './test-detail.html',
   styleUrl: './test-detail.scss',
 })
@@ -40,6 +40,8 @@ export class TestDetail {
   readonly running = signal(false);
   readonly saving = signal(false);
   readonly dragRole = signal<FileRole | null>(null);
+  readonly columnFilter = signal('');
+  readonly mappingFilter = signal('');
 
   readonly slots: UploadSlot[] = [
     {
@@ -59,8 +61,6 @@ export class TestDetail {
     },
   ];
 
-  readonly deltaModes: DeltaValueMode[] = ['new_value', 'old_value', 'presence_only'];
-  readonly modeLabels = DELTA_MODE_LABELS;
 
   readonly dataColumns = computed(() => {
     const test = this.test();
@@ -68,6 +68,20 @@ export class TestDetail {
   });
 
   readonly deltaColumns = computed(() => this.test()?.datasets?.delta?.columns ?? []);
+
+  /** Data columns available to compare, minus the key and last-modified picks. */
+  readonly comparableColumns = computed(() => {
+    const config = this.config();
+    return this.dataColumns().filter(
+      (column) => column !== config?.key_columns[0] && column !== config?.last_modified_column,
+    );
+  });
+
+  readonly visibleComparableColumns = computed(() => {
+    const needle = this.columnFilter().trim().toLowerCase();
+    if (!needle) return this.comparableColumns();
+    return this.comparableColumns().filter((column) => column.toLowerCase().includes(needle));
+  });
 
   readonly ready = computed(() => {
     const datasets = this.test()?.datasets ?? {};
@@ -192,6 +206,22 @@ export class TestDetail {
   payloadDeltaColumns(): string[] {
     const keys = new Set(this.config()?.delta_key_columns ?? []);
     return this.deltaColumns().filter((c) => !keys.has(c));
+  }
+
+  /** Mapping rows matching the search box, by delta column or by what it sets. */
+  visibleMappingColumns(): string[] {
+    const needle = this.mappingFilter().trim().toLowerCase();
+    const all = this.payloadDeltaColumns();
+    if (!needle) return all;
+    return all.filter(
+      (column) =>
+        column.toLowerCase().includes(needle) ||
+        this.mappingFor(column).toLowerCase().includes(needle),
+    );
+  }
+
+  mappedCount(): number {
+    return this.payloadDeltaColumns().filter((c) => !!this.mappingFor(c)).length;
   }
 
   saveConfig(): void {

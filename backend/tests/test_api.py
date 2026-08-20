@@ -93,15 +93,19 @@ def test_config_can_be_overridden(client):
     for role, filename in (("before", "before.csv"), ("after", "after.csv"), ("delta", "delta.csv")):
         upload(client, test_id, role, filename)
 
-    config = client.get(f"/api/tests/{test_id}").json()["config"]
-    config["delta_value_mode"] = "presence_only"
-    saved = client.put(f"/api/tests/{test_id}/config", json=config)
-    assert saved.status_code == 200
+    strict = client.post(f"/api/tests/{test_id}/run").json()
+    # The feed re-sent 'uk' for issuer 1 but the record became 'india'.
+    assert strict["issues_by_code"].get("UNEXPECTED_CHANGE") == 1
+    assert strict["status"] == "FAIL"
 
-    summary = client.post(f"/api/tests/{test_id}/run").json()
-    # Only the regressed timestamp on row 1 fails in presence-only mode.
-    assert summary["issues_by_code"].get("TIMESTAMP_REGRESSED") == 1
-    assert summary["issues_by_code"].get("WRONG_VALUE") is None
+    config = client.get(f"/api/tests/{test_id}").json()["config"]
+    config["strict_unlisted_columns"] = False
+    assert client.put(f"/api/tests/{test_id}/config", json=config).status_code == 200
+
+    relaxed = client.post(f"/api/tests/{test_id}/run").json()
+    # Downgraded to a warning, but the regressed timestamp still fails the run.
+    assert relaxed["cells_warned"] == 1
+    assert relaxed["issues_by_code"].get("TIMESTAMP_REGRESSED") == 1
 
 
 def test_rejects_unsupported_file_type(client):

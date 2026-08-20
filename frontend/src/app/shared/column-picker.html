@@ -1,0 +1,52 @@
+<div class="picker" [class.is-open]="open()">
+  <button
+    type="button"
+    class="trigger"
+    [disabled]="disabled()"
+    [attr.aria-expanded]="open()"
+    aria-haspopup="listbox"
+    (click)="toggle()"
+  >
+    <span class="current" [class.is-placeholder]="!label()">{{ label() || placeholder() }}</span>
+    <span class="caret" aria-hidden="true">▾</span>
+  </button>
+
+  @if (open()) {
+    <div class="panel">
+      <input
+        #search
+        type="text"
+        class="search"
+        role="combobox"
+        aria-controls="picker-list"
+        aria-autocomplete="list"
+        [attr.aria-expanded]="true"
+        placeholder="Search columns…"
+        [value]="query()"
+        (input)="onQuery($event)"
+        (keydown)="onKey($event)"
+      />
+
+      <ul class="list" id="picker-list" role="listbox">
+        @for (item of filtered(); track item.value; let i = $index) {
+          <li
+            role="option"
+            [attr.aria-selected]="item.value === value()"
+            [class.is-active]="i === activeIndex()"
+            [class.is-chosen]="item.value === value()"
+            (mouseenter)="activeIndex.set(i)"
+            (mousedown)="choose(item.value, $event)"
+          >
+            @for (part of parts(item.label); track $index) {
+              <span [class.hit]="part.hit">{{ part.text }}</span>
+            }
+          </li>
+        } @empty {
+          <li class="no-match">No column matches “{{ query() }}”</li>
+        }
+      </ul>
+
+      <p class="count">{{ filtered().length }} of {{ items().length }}</p>
+    </div>
+  }
+</div>
