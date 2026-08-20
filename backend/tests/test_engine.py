@@ -247,6 +247,49 @@ def test_key_columns_are_required():
         run_validation(data(("1", "x", "y")), data(("1", "x", "y")), feed(), TestConfig())
 
 
+def test_composite_key_matches_only_when_every_column_agrees():
+    """Two rows share an Id but differ on Region — a single-column key would
+    collide them as duplicates. ANDing Id + Region tells them apart."""
+    columns = ["Id", "Region", "att1"]
+    rows = dataset(
+        columns,
+        [
+            {"Id": "1", "Region": "US", "att1": "uk"},
+            {"Id": "1", "Region": "EU", "att1": "france"},
+        ],
+    )
+    before = rows
+    after = dataset(
+        columns,
+        [
+            {"Id": "1", "Region": "US", "att1": "india"},  # updated
+            {"Id": "1", "Region": "EU", "att1": "france"},  # left alone
+        ],
+    )
+    delta = dataset(
+        ["Issuer", "Zone", "country"],
+        [{"Issuer": "1", "Zone": "US", "country": "india"}],
+    )
+
+    cfg = TestConfig(
+        key_columns=["Id", "Region"],
+        delta_key_columns=["Issuer", "Zone"],
+        compare_columns=["att1"],
+        delta_column_map=[ColumnMapping(delta_column="country", target_column="att1")],
+        check_timestamp=False,
+    )
+
+    result = run_validation(before, after, delta, cfg)
+    rows_by = rows_by_key(result)
+
+    assert set(rows_by) == {"1||us", "1||eu"}
+    assert rows_by["1||us"]["rowType"] == "UPDATE_EXPECTED"
+    assert rows_by["1||us"]["cells"]["att1"]["code"] == "CORRECT_UPDATE"
+    assert rows_by["1||eu"]["rowType"] == "UNTOUCHED"
+    assert rows_by["1||eu"]["cells"]["att1"]["code"] == "CORRECT_UNCHANGED"
+    assert result["summary"]["status"] == "PASS"
+
+
 # -------------------------------------------------------------------- the summary
 
 
