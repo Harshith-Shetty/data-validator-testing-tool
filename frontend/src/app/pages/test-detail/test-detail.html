@@ -60,9 +60,32 @@
               (change)="onFileInput(slot.role, $event)"
             />
           </label>
+
+          <div class="local-path-row">
+            <input
+              type="text"
+              class="local-path-input"
+              placeholder="…or a local file path"
+              [ngModel]="localPathFor(slot.role)"
+              (ngModelChange)="setLocalPath(slot.role, $event)"
+              (keydown.enter)="loadFromPath(slot.role)"
+            />
+            <button
+              type="button"
+              class="small"
+              [disabled]="!localPathFor(slot.role).trim() || !!busyRole()"
+              (click)="loadFromPath(slot.role)"
+            >
+              Load
+            </button>
+          </div>
         </div>
       }
     </div>
+    <p class="muted small local-path-hint">
+      Running the backend on this machine? Paste a path instead of uploading — it reads the file
+      straight off disk.
+    </p>
 
     <!-- ----------------------------------------------------------- previews -->
     @if (dataset('before') || dataset('after') || dataset('delta')) {

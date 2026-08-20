@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -13,6 +15,7 @@ from .. import ingest, storage
 from ..models import (
     DatasetSummary,
     FileRole,
+    LocalFilePath,
     RunSummary,
     TestConfig,
     TestCreate,
@@ -26,6 +29,16 @@ from ..validation.suggest import suggest_config
 router = APIRouter(prefix="/api")
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+# Reading a file by server-side path is meant for running the backend and
+# frontend on the same machine during local development. Disable it for any
+# deployment where the backend is not just standing in for the user's own
+# filesystem.
+LOCAL_FILES_ENABLED = os.environ.get("DVT_ALLOW_LOCAL_FILES", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
 
 
 def _require_test(test_id: str) -> ValidationTest:
@@ -82,17 +95,16 @@ def delete_test(test_id: str) -> None:
 # ------------------------------------------------------------------------ datasets
 
 
-@router.post("/tests/{test_id}/files/{role}", response_model=ValidationTest)
-async def upload_file(test_id: str, role: FileRole, file: UploadFile = File(...)) -> ValidationTest:
-    test = _require_test(test_id)
-    content = await file.read()
+def _store_dataset(
+    test: ValidationTest, test_id: str, role: FileRole, filename: str, content: bytes
+) -> ValidationTest:
     if not content:
-        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+        raise HTTPException(status_code=422, detail="File is empty")
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the 100 MB upload limit")
 
     try:
-        dataset = ingest.parse_upload(file.filename or f"{role.value}.csv", content)
+        dataset = ingest.parse_upload(filename, content)
     except ingest.IngestError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -109,6 +121,35 @@ async def upload_file(test_id: str, role: FileRole, file: UploadFile = File(...)
     test.config = suggest_config(*_load_datasets(test_id), current=test.config)
     test.updated_at = utcnow()
     return storage.save_test(test)
+
+
+@router.post("/tests/{test_id}/files/{role}", response_model=ValidationTest)
+async def upload_file(test_id: str, role: FileRole, file: UploadFile = File(...)) -> ValidationTest:
+    test = _require_test(test_id)
+    content = await file.read()
+    return _store_dataset(test, test_id, role, file.filename or f"{role.value}.csv", content)
+
+
+@router.post("/tests/{test_id}/files/{role}/local", response_model=ValidationTest)
+def load_local_file(test_id: str, role: FileRole, payload: LocalFilePath) -> ValidationTest:
+    """Read a file straight off the backend's disk — for running frontend and
+    backend on the same machine, so there is no need to upload a copy."""
+    if not LOCAL_FILES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Loading files by local path is disabled on this server. "
+                "Set DVT_ALLOW_LOCAL_FILES=1 if the backend is running on your own machine."
+            ),
+        )
+    test = _require_test(test_id)
+    path = Path(payload.path).expanduser()
+    if not path.is_file():
+        raise HTTPException(
+            status_code=422, detail=f"'{payload.path}' is not a file the backend can see"
+        )
+
+    return _store_dataset(test, test_id, role, path.name, path.read_bytes())
 
 
 @router.get("/tests/{test_id}/files/{role}")

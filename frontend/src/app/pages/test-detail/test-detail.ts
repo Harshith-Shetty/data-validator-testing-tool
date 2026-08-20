@@ -42,6 +42,7 @@ export class TestDetail {
   readonly dragRole = signal<FileRole | null>(null);
   readonly columnFilter = signal('');
   readonly mappingFilter = signal('');
+  readonly localPaths = signal<Partial<Record<FileRole, string>>>({});
 
   readonly slots: UploadSlot[] = [
     {
@@ -145,6 +146,34 @@ export class TestDetail {
         this.test.set(test);
         this.busyRole.set(null);
         this.notice.set(`${file.name} loaded — ${test.datasets[role]?.row_count ?? 0} rows.`);
+      },
+      error: (err) => {
+        this.error.set(this.message(err));
+        this.busyRole.set(null);
+      },
+    });
+  }
+
+  localPathFor(role: FileRole): string {
+    return this.localPaths()[role] ?? '';
+  }
+
+  setLocalPath(role: FileRole, path: string): void {
+    this.localPaths.update((paths) => ({ ...paths, [role]: path }));
+  }
+
+  /** Reads a file straight off the backend's disk — handy when frontend and
+   * backend are running on the same machine, so nothing has to be uploaded. */
+  loadFromPath(role: FileRole): void {
+    const path = this.localPathFor(role).trim();
+    if (!path || this.busyRole()) return;
+    this.error.set('');
+    this.busyRole.set(role);
+    this.api.loadLocalFile(this.testId(), role, path).subscribe({
+      next: (test) => {
+        this.test.set(test);
+        this.busyRole.set(null);
+        this.notice.set(`${path} loaded — ${test.datasets[role]?.row_count ?? 0} rows.`);
       },
       error: (err) => {
         this.error.set(this.message(err));

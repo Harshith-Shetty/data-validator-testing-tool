@@ -40,6 +40,12 @@ export class Api {
     return this.http.post<ValidationTest>(`${BASE}/tests/${id}/files/${role}`, body);
   }
 
+  /** Reads a file straight off the backend's disk — for running frontend and
+   * backend on the same machine, so nothing has to be re-uploaded. */
+  loadLocalFile(id: string, role: FileRole, path: string): Observable<ValidationTest> {
+    return this.http.post<ValidationTest>(`${BASE}/tests/${id}/files/${role}/local`, { path });
+  }
+
   saveConfig(id: string, config: TestConfig): Observable<ValidationTest> {
     return this.http.put<ValidationTest>(`${BASE}/tests/${id}/config`, config);
   }

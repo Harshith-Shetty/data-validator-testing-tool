@@ -42,6 +42,22 @@
   margin-top: auto;
 }
 
+.local-path-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.local-path-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.local-path-hint {
+  margin: 0.2rem 0 0;
+}
+
 .previews {
   display: grid;
   gap: 1rem;

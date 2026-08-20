@@ -18,14 +18,19 @@ TIMESTAMP_NAME_HINTS = ("modif", "updat", "changed", "timestamp", "date", "time"
 
 
 def _tokens(name: str) -> set[str]:
-    return {t for t in re.split(r"[^a-z0-9]+", name.casefold()) if t}
+    # Split camelCase/PascalCase boundaries before casefolding collapses them,
+    # so "IsFixedAmortisation" and "IS_FIXED_AMORTISATION" tokenise the same way.
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
+    return {t for t in re.split(r"[^a-zA-Z0-9]+", spaced.casefold()) if t}
 
 
 def _name_score(a: str, b: str) -> float:
     left, right = a.casefold().strip(), b.casefold().strip()
     if left == right:
         return 1.0
-    ta, tb = _tokens(left), _tokens(right)
+    # _tokens needs the original casing to find camelCase word boundaries —
+    # casefolding first (as `left`/`right` are) would erase that signal.
+    ta, tb = _tokens(a.strip()), _tokens(b.strip())
     if ta and ta == tb:
         return 0.9
     if ta & tb:

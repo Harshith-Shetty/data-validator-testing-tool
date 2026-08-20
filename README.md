@@ -54,9 +54,17 @@ cd frontend && npm install && npm start     # proxies /api to :8000
 Tests:
 
 ```bash
-cd backend && .venv/bin/python -m pytest      # 24 tests: engine rules + API flow
+cd backend && .venv/bin/python -m pytest      # engine rules + API flow
 cd frontend && npm run build
 ```
+
+### Loading files without uploading them
+
+If the backend is running on the same machine as the browser, each upload
+card also takes a file path instead of a file — the backend reads it straight
+off disk, so nothing has to be picked and re-uploaded. Set
+`DVT_ALLOW_LOCAL_FILES=0` to turn this off (e.g. before deploying the backend
+somewhere it should not read the local filesystem for a caller).
 
 ## Try it with the sample data
 
@@ -152,6 +160,7 @@ per test.
 | `POST` | `/api/tests` | create a test |
 | `GET/PATCH/DELETE` | `/api/tests/{id}` | read / rename / delete |
 | `POST` | `/api/tests/{id}/files/{before\|after\|delta}` | upload a CSV/XLSX (parsed to JSON) |
+| `POST` | `/api/tests/{id}/files/{role}/local` | load a CSV/XLSX from a path on the backend's disk |
 | `GET` | `/api/tests/{id}/files/{role}` | paged rows of an uploaded file |
 | `PUT` | `/api/tests/{id}/config` | save the column mapping and rule toggles |
 | `POST` | `/api/tests/{id}/config/suggest` | re-detect the mapping from the files |

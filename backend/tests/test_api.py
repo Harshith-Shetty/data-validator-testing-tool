@@ -117,6 +117,35 @@ def test_rejects_unsupported_file_type(client):
     assert response.status_code == 422
 
 
+def test_load_file_by_local_path(client):
+    test_id = client.post("/api/tests", json={"name": "local path"}).json()["id"]
+    response = client.post(
+        f"/api/tests/{test_id}/files/before/local",
+        json={"path": str(SAMPLES / "before.csv")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["datasets"]["before"]["row_count"] == 3
+
+
+def test_load_file_by_local_path_rejects_missing_file(client):
+    test_id = client.post("/api/tests", json={"name": "local path missing"}).json()["id"]
+    response = client.post(
+        f"/api/tests/{test_id}/files/before/local",
+        json={"path": str(SAMPLES / "does-not-exist.csv")},
+    )
+    assert response.status_code == 422
+
+
+def test_load_file_by_local_path_can_be_disabled(client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.LOCAL_FILES_ENABLED", False)
+    test_id = client.post("/api/tests", json={"name": "local path disabled"}).json()["id"]
+    response = client.post(
+        f"/api/tests/{test_id}/files/before/local",
+        json={"path": str(SAMPLES / "before.csv")},
+    )
+    assert response.status_code == 403
+
+
 def test_missing_test_returns_404(client):
     assert client.get("/api/tests/test_does_not_exist").status_code == 404
 
