@@ -50,8 +50,11 @@ export class Api {
     return this.http.put<ValidationTest>(`${BASE}/tests/${id}/config`, config);
   }
 
-  suggestConfig(id: string): Observable<TestConfig> {
-    return this.http.post<TestConfig>(`${BASE}/tests/${id}/config/suggest`, {});
+  /** With no draft, suggests a whole config from scratch. Passed a draft, only
+   * fills in the fields left empty on it — e.g. clear `delta_column_map` to
+   * re-suggest just the mapping while keeping the rest as-is. */
+  suggestConfig(id: string, draft?: TestConfig): Observable<TestConfig> {
+    return this.http.post<TestConfig>(`${BASE}/tests/${id}/config/suggest`, draft ?? {});
   }
 
   runTest(id: string): Observable<RunSummary> {

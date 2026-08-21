@@ -282,6 +282,41 @@ export class TestDetail {
     return this.payloadDeltaColumns().filter((c) => !!this.mappingFor(c)).length;
   }
 
+  resetMapping(): void {
+    const test = this.test();
+    const config = this.config();
+    if (!test || !config || !config.delta_column_map.length) return;
+    this.test.set({ ...test, config: { ...config, delta_column_map: [] } });
+    this.notice.set('Delta column mapping cleared.');
+  }
+
+  /** Re-suggests just the delta → data mapping, leaving the rest of the
+   * config (row matching, compare columns, rules) exactly as it is. */
+  autoPopulateMapping(): void {
+    const test = this.test();
+    const config = this.config();
+    if (!test || !config) return;
+    this.error.set('');
+    const draft: TestConfig = { ...config, delta_column_map: [] };
+    this.api.suggestConfig(this.testId(), draft).subscribe({
+      next: (suggested) => {
+        const current = this.test();
+        if (!current) return;
+        this.test.set({
+          ...current,
+          config: { ...current.config, delta_column_map: suggested.delta_column_map },
+        });
+        const mapped = suggested.delta_column_map.length;
+        this.notice.set(
+          mapped
+            ? `Mapped ${mapped} delta column${mapped === 1 ? '' : 's'} automatically.`
+            : 'No confident column matches were found.',
+        );
+      },
+      error: (err) => this.error.set(this.message(err)),
+    });
+  }
+
   saveConfig(): void {
     const config = this.config();
     if (!config) return;

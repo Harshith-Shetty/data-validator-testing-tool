@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from .. import ingest, storage
@@ -194,9 +194,13 @@ def set_config(test_id: str, config: TestConfig) -> ValidationTest:
 
 
 @router.post("/tests/{test_id}/config/suggest", response_model=TestConfig)
-def suggest(test_id: str) -> TestConfig:
+def suggest(test_id: str, current: TestConfig | None = Body(default=None)) -> TestConfig:
+    """Suggest a config. With no body, suggests everything from scratch (the
+    "Re-detect columns" button). Passed a draft config, only fills in the
+    fields left empty on it — e.g. clear just `delta_column_map` to re-suggest
+    the mapping alone while keeping the rest of the draft untouched."""
     _require_test(test_id)
-    return suggest_config(*_load_datasets(test_id), current=None)
+    return suggest_config(*_load_datasets(test_id), current=current)
 
 
 # ----------------------------------------------------------------------------- runs
