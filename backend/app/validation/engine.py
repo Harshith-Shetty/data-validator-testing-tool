@@ -93,16 +93,36 @@ def _cell(
     *,
     has_expected: bool = True,
 ) -> dict[str, Any]:
-    return {
-        "column": column,
-        "before": display(before),
-        "after": display(after),
-        "expected": display(expected) if has_expected else None,
-        "changed": display(before) != display(after),
+    before_display = display(before)
+    after_display = display(after)
+    changed = before_display != after_display
+
+    expected_display = display(expected) if has_expected else None
+    if expected_display == after_display:
+        # Nothing beyond what `after` already says — most cells in a run are
+        # unchanged PASS cells where before/expected/after all match.
+        expected_display = None
+
+    # `column` is dropped — it always duplicates this dict's key in the
+    # parent `cells` map. `before`/`expected`/`message` are only included
+    # when they add information beyond `after` — most cells in a run are
+    # unchanged PASS cells, and a key present-but-null still costs its label
+    # and quotes, so omitting rather than nulling it is what actually shrinks
+    # a run's JSON (see results.ts beforeDisplay() and tooltip(), and the CSV
+    # export, which all reconstruct the omitted fallback from `after`).
+    cell: dict[str, Any] = {
+        "after": after_display,
+        "changed": changed,
         "status": status.value,
         "code": code.value,
-        "message": message,
     }
+    if changed:
+        cell["before"] = before_display
+    if expected_display is not None:
+        cell["expected"] = expected_display
+    if message:
+        cell["message"] = message
+    return cell
 
 
 def run_validation(
@@ -407,14 +427,15 @@ def run_validation(
             messages.append("Key appears more than once; only the first occurrence was compared.")
             bump(issues, RuleCode.DUPLICATE_KEY.value)
 
-        for cell in cells.values():
+        for column, cell in cells.items():
             if cell["code"] != RuleCode.KEY.value and cell["status"] in (
                 CellStatus.FAIL.value,
                 CellStatus.WARN.value,
             ):
                 bump(issues, cell["code"])
-            if cell["message"] and cell["status"] == CellStatus.FAIL.value:
-                note = f"{cell['column']}: {cell['message']}"
+            message = cell.get("message")
+            if message and cell["status"] == CellStatus.FAIL.value:
+                note = f"{column}: {message}"
                 if note not in messages:
                     messages.append(note)
 

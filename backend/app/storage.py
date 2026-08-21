@@ -11,12 +11,13 @@ test later never re-parses a CSV/XLSX. Layout:
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import uuid
 from pathlib import Path
 from typing import Any
+
+import orjson
 
 from .models import ValidationTest
 
@@ -38,14 +39,15 @@ def new_id(prefix: str) -> str:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False, default=str)
+    # orjson is a C extension and several times faster than the stdlib json
+    # module at both encode and decode, which matters once a run's results
+    # run into the tens of megabytes.
+    tmp.write_bytes(orjson.dumps(payload, default=str))
     tmp.replace(path)
 
 
 def _read_json(path: Path) -> Any:
-    with path.open(encoding="utf-8") as fh:
-        return json.load(fh)
+    return orjson.loads(path.read_bytes())
 
 
 # --------------------------------------------------------------------------- tests
@@ -100,8 +102,32 @@ def load_dataset(test_id: str, role: str) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------- runs
 
 
+def _run_index_path(test_id: str) -> Path:
+    return test_dir(test_id) / "runs" / "index.json"
+
+
 def save_run(test_id: str, run_id: str, payload: dict[str, Any]) -> None:
-    _write_json(test_dir(test_id) / "runs" / f"{run_id}.json", payload)
+    runs_dir = test_dir(test_id) / "runs"
+    _write_json(runs_dir / f"{run_id}.json", payload)
+    # A run's full body carries every row's cell-level results and can run
+    # into tens or hundreds of megabytes, so list_runs (the "run history"
+    # table) keeps its own small index of just the summaries — reading every
+    # run body only to throw the rows away would make even opening a test
+    # slow once a few large runs pile up.
+    index_path = _run_index_path(test_id)
+    if index_path.exists():
+        summaries = _read_json(index_path)
+    else:
+        # First save since the index was introduced: backfill it from
+        # whatever run files already exist so older history isn't dropped
+        # from the list. One-time cost, same as the old read-every-run path.
+        summaries = [
+            _read_json(p).get("summary", {})
+            for p in runs_dir.glob("*.json")
+            if p.name not in (f"{run_id}.json", "index.json")
+        ]
+    summaries.append(payload.get("summary", {}))
+    _write_json(index_path, summaries)
 
 
 def load_run(test_id: str, run_id: str) -> dict[str, Any] | None:
@@ -112,8 +138,16 @@ def load_run(test_id: str, run_id: str) -> dict[str, Any] | None:
 
 
 def list_runs(test_id: str) -> list[dict[str, Any]]:
-    runs_dir = test_dir(test_id) / "runs"
-    if not runs_dir.exists():
-        return []
-    summaries = [_read_json(p).get("summary", {}) for p in runs_dir.glob("*.json")]
+    index_path = _run_index_path(test_id)
+    if index_path.exists():
+        summaries = _read_json(index_path)
+    else:
+        # Runs saved before the index existed: fall back to the slow path
+        # once, rather than losing their history.
+        runs_dir = test_dir(test_id) / "runs"
+        if not runs_dir.exists():
+            return []
+        summaries = [
+            _read_json(p).get("summary", {}) for p in runs_dir.glob("*.json") if p.name != "index.json"
+        ]
     return sorted(summaries, key=lambda s: s.get("started_at", ""), reverse=True)

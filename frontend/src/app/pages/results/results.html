@@ -150,7 +150,7 @@
                 @if (row.cells[column]; as cell) {
                   <tr>
                     <td><strong>{{ column }}</strong></td>
-                    <td class="mono">{{ cell.before || '—' }}</td>
+                    <td class="mono">{{ beforeDisplay(cell) || '—' }}</td>
                     <td class="mono">{{ cell.after || '—' }}</td>
                     <td class="mono">{{ cell.expected ?? '—' }}</td>
                     <td>

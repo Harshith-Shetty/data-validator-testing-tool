@@ -218,14 +218,20 @@ export class Results {
     if (!cell.changed || !showBefore) {
       return `<span class="dvt-value">${after}</span>`;
     }
-    const before = this.escape(cell.before) || '∅';
+    const before = this.escape(this.beforeDisplay(cell)) || '∅';
     return `<span class="dvt-value"><span class="dvt-before">${before}</span><span class="dvt-arrow">→</span>${after}</span>`;
+  }
+
+  /** An unchanged cell doesn't carry `before` over the wire — it equals
+   * `after` — so this is where that fallback happens for display purposes. */
+  beforeDisplay(cell: CellResult): string {
+    return (cell.changed ? cell.before : cell.after) ?? '';
   }
 
   private tooltip(cell: CellResult | undefined): string {
     if (!cell) return '';
     const parts = [`${cell.column}: ${RULE_LABELS[cell.code] ?? cell.code}`];
-    parts.push(`before: ${cell.before || '∅'}`);
+    parts.push(`before: ${this.beforeDisplay(cell) || '∅'}`);
     parts.push(`current: ${cell.after || '∅'}`);
     if (cell.expected !== null && cell.expected !== undefined) {
       parts.push(`delta says: ${cell.expected}`);
@@ -234,7 +240,7 @@ export class Results {
     return parts.join('\n');
   }
 
-  private escape(value: string): string {
+  private escape(value: string | null | undefined): string {
     return String(value ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')

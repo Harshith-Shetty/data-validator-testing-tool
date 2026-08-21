@@ -7,6 +7,7 @@ import io
 import logging
 import os
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -269,6 +270,24 @@ def list_runs(test_id: str) -> list[RunSummary]:
     return [RunSummary.model_validate(s) for s in storage.list_runs(test_id)]
 
 
+@lru_cache(maxsize=8)
+def _load_run_cached(test_id: str, run_id: str) -> dict[str, Any] | None:
+    # A run is written once under a fresh id and never rewritten, so caching
+    # it in-process is safe indefinitely — it turns "re-read and re-parse a
+    # possibly huge run file" into a dict lookup for every filter, search or
+    # pagination request against a run someone is actively looking at.
+    started = time.time()
+    run = storage.load_run(test_id, run_id)
+    if run is not None:
+        logger.info(
+            "test=%s run=%s: loaded from disk in %d ms (now cached)",
+            test_id,
+            run_id,
+            int((time.time() - started) * 1000),
+        )
+    return run
+
+
 @router.get("/tests/{test_id}/runs/{run_id}")
 def get_run(
     test_id: str,
@@ -280,7 +299,7 @@ def get_run(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     _require_test(test_id)
-    run = storage.load_run(test_id, run_id)
+    run = _load_run_cached(test_id, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
@@ -312,16 +331,23 @@ def _filter_rows(
 def _row_matches(row: dict[str, Any], needle: str) -> bool:
     if needle in row["key"].casefold():
         return True
-    return any(
-        needle in str(cell["before"]).casefold() or needle in str(cell["after"]).casefold()
-        for cell in row["cells"].values()
-    )
+    for cell in row["cells"].values():
+        # `before` is only sent when it differs from `after` — see
+        # engine._cell() — so an unchanged cell has nothing to check beyond
+        # `after`, which already carries that (identical) value.
+        after = cell.get("after")
+        if after is not None and needle in str(after).casefold():
+            return True
+        before = cell.get("before")
+        if before is not None and needle in str(before).casefold():
+            return True
+    return False
 
 
 @router.get("/tests/{test_id}/runs/{run_id}/export")
 def export_run(test_id: str, run_id: str, status: str | None = Query(default=None)):
     _require_test(test_id)
-    run = storage.load_run(test_id, run_id)
+    run = _load_run_cached(test_id, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
@@ -339,8 +365,14 @@ def export_run(test_id: str, run_id: str, status: str | None = Query(default=Non
         record = [row["key"], row["rowStatus"], row["rowType"]]
         for column in columns:
             cell = row["cells"].get(column, {})
+            # An unchanged cell carries `before: null` (it equals `after`,
+            # see engine._cell()) — fall back to `after` so the export still
+            # shows the full value in both columns.
+            before = cell.get("before")
+            if before is None:
+                before = cell.get("after", "")
             record += [
-                cell.get("before", ""),
+                before,
                 cell.get("after", ""),
                 f"{cell.get('status', '')}:{cell.get('code', '')}",
             ]

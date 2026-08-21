@@ -84,6 +84,44 @@ def test_update_noop_insert_and_missing_insert(config):
     assert rows["4"]["cells"]["att1"]["code"] == "MISSING_INSERT"
 
 
+# ------------------------------------------------------------------ cell payload size
+
+
+def test_cell_payload_omits_redundant_fields(config):
+    """column/before/expected duplicate other data when they add nothing — a
+    run's JSON can run into hundreds of MB across many rows, so trimming
+    what doesn't add information matters."""
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-01-01 10:00:00", "uk"))  # untouched, unchanged
+    delta = feed()
+
+    row = rows_by_key(run_validation(before, after, delta, config))["1"]
+    cell = row["cells"]["att1"]
+
+    assert "column" not in cell  # duplicates the cells dict's own key
+    assert "before" not in cell  # equals after; nothing to add
+    assert "expected" not in cell  # also equals after
+    assert cell["after"] == "uk"
+    assert cell["changed"] is False
+
+    key_cell = row["cells"]["Id"]
+    assert "message" not in key_cell  # key cells carry no explanation
+
+
+def test_cell_payload_keeps_fields_that_add_information(config):
+    before = data(("1", "2026-01-01 10:00:00", "uk"))
+    after = data(("1", "2026-06-01 09:00:00", "brazil"))
+    delta = feed(("1", "india"))  # feed wants india, but the record says brazil
+
+    row = rows_by_key(run_validation(before, after, delta, config))["1"]
+    cell = row["cells"]["att1"]
+
+    assert cell["code"] == "WRONG_VALUE"
+    assert cell["before"] == "uk"  # changed; worth sending
+    assert cell["expected"] == "india"  # differs from after; worth sending
+    assert "india" in cell["message"]
+
+
 def test_noop_must_not_be_restamped(config):
     """Re-sending an identical record should not mark the record as modified."""
     before = data(("1", "2026-01-01 10:00:00", "uk"))

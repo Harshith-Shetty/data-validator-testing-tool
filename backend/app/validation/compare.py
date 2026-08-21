@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
-import pandas as pd
+from dateutil import parser as _date_parser
 
 BLANKS = {"", "null", "none", "nan", "n/a", "na", "-"}
 
@@ -52,6 +53,10 @@ def values_equal(
     case_sensitive: bool = False,
     numeric_tolerance: float = 0.0,
 ) -> bool:
+    # Identical raw values stay identical through trim/casefold, so this is a
+    # safe shortcut — and the common case: most cells in a run are unchanged.
+    if left == right:
+        return True
     a = normalise(left, trim=trim, case_sensitive=case_sensitive)
     b = normalise(right, trim=trim, case_sensitive=case_sensitive)
     if a is None or b is None:
@@ -70,14 +75,24 @@ def key_of(row: dict[str, Any], columns: list[str], *, case_sensitive: bool = Fa
     return "||".join(parts)
 
 
-def parse_timestamp(value: Any) -> datetime | None:
-    if value is None or (isinstance(value, str) and value.strip() == ""):
-        return None
+@lru_cache(maxsize=8192)
+def _parse_timestamp_text(text: str) -> datetime | None:
+    # Timestamp columns are typically low-cardinality (a handful of batch
+    # stamps repeated across many rows), so caching the parse of each
+    # distinct string avoids re-parsing it on every row that shares it.
     try:
-        parsed = pd.to_datetime(value, errors="coerce", format="mixed", dayfirst=False)
-    except (ValueError, TypeError):
+        parsed = _date_parser.parse(text, dayfirst=False)
+    except (ValueError, OverflowError, TypeError):
         return None
-    if parsed is None or pd.isna(parsed):
+    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def parse_timestamp(value: Any) -> datetime | None:
+    if value is None:
         return None
-    stamp = parsed.to_pydatetime() if isinstance(parsed, pd.Timestamp) else parsed
-    return stamp.replace(tzinfo=None) if stamp.tzinfo else stamp
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
+    text = str(value).strip()
+    if not text:
+        return None
+    return _parse_timestamp_text(text)

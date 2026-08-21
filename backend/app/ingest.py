@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import io
 import logging
 import time
@@ -21,19 +22,35 @@ class IngestError(ValueError):
     """Raised when an uploaded file cannot be parsed into a table."""
 
 
+def _sniff_delimiter(content: bytes) -> str | None:
+    sample = content[:65536].decode("utf-8", errors="ignore")
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return None
+
+
 def _read_frame(filename: str, content: bytes) -> pd.DataFrame:
     lower = filename.lower()
     try:
         if lower.endswith((".xlsx", ".xlsm", ".xls")):
             return pd.read_excel(io.BytesIO(content), dtype=object)
-        sep = "\t" if lower.endswith(".tsv") else None
-        # sep=None asks the python engine to sniff the delimiter.
+
+        sep = "\t" if lower.endswith(".tsv") else (_sniff_delimiter(content) or ",")
+
+        try:
+            # pandas' default C engine is many times faster than the python
+            # engine `sep=None` forces for delimiter-sniffing, so sniff the
+            # delimiter ourselves first and only fall back to that slower,
+            # more forgiving engine if the quick guess was wrong.
+            frame = pd.read_csv(io.BytesIO(content), dtype=object, sep=sep, skipinitialspace=True)
+            if frame.shape[1] > 1 or sep == "\t":
+                return frame
+        except Exception:
+            pass  # fall through to the slower, more forgiving parser below
+
         return pd.read_csv(
-            io.BytesIO(content),
-            dtype=object,
-            sep=sep,
-            engine="python",
-            skipinitialspace=True,
+            io.BytesIO(content), dtype=object, sep=None, engine="python", skipinitialspace=True
         )
     except Exception as exc:  # pragma: no cover - surfaced to the user verbatim
         raise IngestError(f"Could not parse '{filename}': {exc}") from exc
@@ -59,8 +76,14 @@ def parse_upload(filename: str, content: bytes) -> dict[str, Any]:
 
     # NaN/NaT are not valid JSON, so normalise every blank to None.
     frame = frame.astype(object).where(pd.notna(frame), None)
-    rows = frame.to_dict(orient="records")
-    rows = [{k: _jsonable(v) for k, v in row.items()} for row in rows]
+    columns = list(frame.columns)
+    # itertuples() is noticeably faster than to_dict(orient="records") on a
+    # wide/large frame, since the latter builds an intermediate structure
+    # pandas has to walk generically rather than iterating the raw values.
+    rows = [
+        {column: _jsonable(value) for column, value in zip(columns, record)}
+        for record in frame.itertuples(index=False, name=None)
+    ]
 
     elapsed_ms = int((time.time() - started) * 1000)
     logger.info(
