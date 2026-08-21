@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import os
+import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +28,8 @@ from ..models import (
 )
 from ..validation.engine import ValidationError, run_validation
 from ..validation.suggest import suggest_config
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -117,8 +122,17 @@ def _store_dataset(
         uploaded_at=dataset["uploaded_at"],
         preview=ingest.preview(dataset),
     )
+
     # Re-suggest anything the user has not pinned down yet.
+    started = time.time()
     test.config = suggest_config(*_load_datasets(test_id), current=test.config)
+    logger.info(
+        "test=%s role=%s: re-suggested config in %d ms",
+        test_id,
+        role.value,
+        int((time.time() - started) * 1000),
+    )
+
     test.updated_at = utcnow()
     return storage.save_test(test)
 
@@ -127,6 +141,13 @@ def _store_dataset(
 async def upload_file(test_id: str, role: FileRole, file: UploadFile = File(...)) -> ValidationTest:
     test = _require_test(test_id)
     content = await file.read()
+    logger.info(
+        "test=%s role=%s: received upload '%s' (%.1f KB)",
+        test_id,
+        role.value,
+        file.filename,
+        len(content) / 1024,
+    )
     return _store_dataset(test, test_id, role, file.filename or f"{role.value}.csv", content)
 
 
@@ -149,6 +170,7 @@ def load_local_file(test_id: str, role: FileRole, payload: LocalFilePath) -> Val
             status_code=422, detail=f"'{payload.path}' is not a file the backend can see"
         )
 
+    logger.info("test=%s role=%s: reading local file '%s'", test_id, role.value, path)
     return _store_dataset(test, test_id, role, path.name, path.read_bytes())
 
 
@@ -200,7 +222,10 @@ def suggest(test_id: str, current: TestConfig | None = Body(default=None)) -> Te
     fields left empty on it — e.g. clear just `delta_column_map` to re-suggest
     the mapping alone while keeping the rest of the draft untouched."""
     _require_test(test_id)
-    return suggest_config(*_load_datasets(test_id), current=current)
+    started = time.time()
+    result = suggest_config(*_load_datasets(test_id), current=current)
+    logger.info("test=%s: suggested config in %d ms", test_id, int((time.time() - started) * 1000))
+    return result
 
 
 # ----------------------------------------------------------------------------- runs
@@ -208,6 +233,7 @@ def suggest(test_id: str, current: TestConfig | None = Body(default=None)) -> Te
 
 @router.post("/tests/{test_id}/run", response_model=RunSummary)
 def run_test(test_id: str) -> RunSummary:
+    logger.info("test=%s: run requested", test_id)
     test = _require_test(test_id)
     before, after, delta = _load_datasets(test_id)
     missing = [
@@ -234,6 +260,7 @@ def run_test(test_id: str) -> RunSummary:
     test.last_run = summary
     test.updated_at = utcnow()
     storage.save_test(test)
+    logger.info("test=%s run=%s: saved", test_id, run_id)
     return summary
 
 
@@ -241,6 +268,24 @@ def run_test(test_id: str) -> RunSummary:
 def list_runs(test_id: str) -> list[RunSummary]:
     _require_test(test_id)
     return [RunSummary.model_validate(s) for s in storage.list_runs(test_id)]
+
+
+@lru_cache(maxsize=8)
+def _load_run_cached(test_id: str, run_id: str) -> dict[str, Any] | None:
+    # A run is written once under a fresh id and never rewritten, so caching
+    # it in-process is safe indefinitely — it turns "re-read and re-parse a
+    # possibly huge run file" into a dict lookup for every filter, search or
+    # pagination request against a run someone is actively looking at.
+    started = time.time()
+    run = storage.load_run(test_id, run_id)
+    if run is not None:
+        logger.info(
+            "test=%s run=%s: loaded from disk in %d ms (now cached)",
+            test_id,
+            run_id,
+            int((time.time() - started) * 1000),
+        )
+    return run
 
 
 @router.get("/tests/{test_id}/runs/{run_id}")
@@ -254,7 +299,7 @@ def get_run(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     _require_test(test_id)
-    run = storage.load_run(test_id, run_id)
+    run = _load_run_cached(test_id, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
@@ -286,16 +331,23 @@ def _filter_rows(
 def _row_matches(row: dict[str, Any], needle: str) -> bool:
     if needle in row["key"].casefold():
         return True
-    return any(
-        needle in str(cell["before"]).casefold() or needle in str(cell["after"]).casefold()
-        for cell in row["cells"].values()
-    )
+    for cell in row["cells"].values():
+        # `before` is only sent when it differs from `after` — see
+        # engine._cell() — so an unchanged cell has nothing to check beyond
+        # `after`, which already carries that (identical) value.
+        after = cell.get("after")
+        if after is not None and needle in str(after).casefold():
+            return True
+        before = cell.get("before")
+        if before is not None and needle in str(before).casefold():
+            return True
+    return False
 
 
 @router.get("/tests/{test_id}/runs/{run_id}/export")
 def export_run(test_id: str, run_id: str, status: str | None = Query(default=None)):
     _require_test(test_id)
-    run = storage.load_run(test_id, run_id)
+    run = _load_run_cached(test_id, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
@@ -313,8 +365,14 @@ def export_run(test_id: str, run_id: str, status: str | None = Query(default=Non
         record = [row["key"], row["rowStatus"], row["rowType"]]
         for column in columns:
             cell = row["cells"].get(column, {})
+            # An unchanged cell carries `before: null` (it equals `after`,
+            # see engine._cell()) — fall back to `after` so the export still
+            # shows the full value in both columns.
+            before = cell.get("before")
+            if before is None:
+                before = cell.get("after", "")
             record += [
-                cell.get("before", ""),
+                before,
                 cell.get("after", ""),
                 f"{cell.get('status', '')}:{cell.get('code', '')}",
             ]

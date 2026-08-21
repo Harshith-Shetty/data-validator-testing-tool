@@ -78,7 +78,9 @@ export interface ValidationTest {
 
 export interface CellResult {
   column: string;
-  before: string;
+  // Only sent when it differs from `after` (an unchanged cell has nothing to
+  // add) — fall back to `after` wherever the pre-change value is needed.
+  before: string | null;
   after: string;
   expected: string | null;
   changed: boolean;

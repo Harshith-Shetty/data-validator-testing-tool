@@ -80,6 +80,27 @@ def test_full_flow(client):
     assert len(listed) == 1
 
 
+def test_run_history_survives_a_missing_summary_index(client, tmp_path):
+    """list_runs reads a small summary index instead of every run body, but
+    that index has to be backfilled from existing runs the first time it's
+    written — otherwise older history a run predating the index would just
+    vanish from the list even though the run file itself is still on disk."""
+    test_id = client.post("/api/tests", json={"name": "index backfill"}).json()["id"]
+    for role, filename in (("before", "before.csv"), ("after", "after.csv"), ("delta", "delta.csv")):
+        upload(client, test_id, role, filename)
+
+    first = client.post(f"/api/tests/{test_id}/run").json()
+
+    index_path = tmp_path / "tests" / test_id / "runs" / "index.json"
+    assert index_path.exists()
+    index_path.unlink()  # simulate a run saved before the index existed
+
+    second = client.post(f"/api/tests/{test_id}/run").json()
+
+    runs = client.get(f"/api/tests/{test_id}/runs").json()
+    assert {r["run_id"] for r in runs} == {first["run_id"], second["run_id"]}
+
+
 def test_run_requires_all_three_files(client):
     test_id = client.post("/api/tests", json={"name": "incomplete"}).json()["id"]
     upload(client, test_id, "before", "before.csv")
