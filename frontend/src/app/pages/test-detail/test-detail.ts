@@ -42,6 +42,7 @@ export class TestDetail {
   readonly dragRole = signal<FileRole | null>(null);
   readonly columnFilter = signal('');
   readonly mappingFilter = signal('');
+  readonly localPaths = signal<Partial<Record<FileRole, string>>>({});
 
   readonly slots: UploadSlot[] = [
     {
@@ -153,6 +154,34 @@ export class TestDetail {
     });
   }
 
+  localPathFor(role: FileRole): string {
+    return this.localPaths()[role] ?? '';
+  }
+
+  setLocalPath(role: FileRole, path: string): void {
+    this.localPaths.update((paths) => ({ ...paths, [role]: path }));
+  }
+
+  /** Reads a file straight off the backend's disk — handy when frontend and
+   * backend are running on the same machine, so nothing has to be uploaded. */
+  loadFromPath(role: FileRole): void {
+    const path = this.localPathFor(role).trim();
+    if (!path || this.busyRole()) return;
+    this.error.set('');
+    this.busyRole.set(role);
+    this.api.loadLocalFile(this.testId(), role, path).subscribe({
+      next: (test) => {
+        this.test.set(test);
+        this.busyRole.set(null);
+        this.notice.set(`${path} loaded — ${test.datasets[role]?.row_count ?? 0} rows.`);
+      },
+      error: (err) => {
+        this.error.set(this.message(err));
+        this.busyRole.set(null);
+      },
+    });
+  }
+
   // ------------------------------------------------------------------- config
 
   toggleCompareColumn(column: string, checked: boolean): void {
@@ -251,6 +280,41 @@ export class TestDetail {
 
   mappedCount(): number {
     return this.payloadDeltaColumns().filter((c) => !!this.mappingFor(c)).length;
+  }
+
+  resetMapping(): void {
+    const test = this.test();
+    const config = this.config();
+    if (!test || !config || !config.delta_column_map.length) return;
+    this.test.set({ ...test, config: { ...config, delta_column_map: [] } });
+    this.notice.set('Delta column mapping cleared.');
+  }
+
+  /** Re-suggests just the delta → data mapping, leaving the rest of the
+   * config (row matching, compare columns, rules) exactly as it is. */
+  autoPopulateMapping(): void {
+    const test = this.test();
+    const config = this.config();
+    if (!test || !config) return;
+    this.error.set('');
+    const draft: TestConfig = { ...config, delta_column_map: [] };
+    this.api.suggestConfig(this.testId(), draft).subscribe({
+      next: (suggested) => {
+        const current = this.test();
+        if (!current) return;
+        this.test.set({
+          ...current,
+          config: { ...current.config, delta_column_map: suggested.delta_column_map },
+        });
+        const mapped = suggested.delta_column_map.length;
+        this.notice.set(
+          mapped
+            ? `Mapped ${mapped} delta column${mapped === 1 ? '' : 's'} automatically.`
+            : 'No confident column matches were found.',
+        );
+      },
+      error: (err) => this.error.set(this.message(err)),
+    });
   }
 
   saveConfig(): void {

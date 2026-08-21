@@ -329,3 +329,21 @@ def test_suggest_config_still_maps_the_example():
     assert [(m.delta_column, m.target_column) for m in suggested.delta_column_map] == [
         ("country", "att1")
     ]
+
+
+def test_suggest_maps_columns_across_naming_conventions():
+    """Delta uses SCREAMING_SNAKE_CASE, the data columns use PascalCase."""
+    before = dataset(
+        ["Id", "IsFixedAmortisation"],
+        [{"Id": "1", "IsFixedAmortisation": "true"}, {"Id": "2", "IsFixedAmortisation": "false"}],
+    )
+    after = dataset(
+        ["Id", "IsFixedAmortisation"],
+        [{"Id": "1", "IsFixedAmortisation": "true"}, {"Id": "2", "IsFixedAmortisation": "true"}],
+    )
+    delta = dataset(["Id", "IS_FIXED_AMORTISATION"], [{"Id": "2", "IS_FIXED_AMORTISATION": "true"}])
+
+    suggested = suggest_config(before, after, delta)
+    assert [(m.delta_column, m.target_column) for m in suggested.delta_column_map] == [
+        ("IS_FIXED_AMORTISATION", "IsFixedAmortisation")
+    ]

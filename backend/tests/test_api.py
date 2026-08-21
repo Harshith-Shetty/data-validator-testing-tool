@@ -108,6 +108,28 @@ def test_config_can_be_overridden(client):
     assert relaxed["issues_by_code"].get("TIMESTAMP_REGRESSED") == 1
 
 
+def test_suggest_can_be_scoped_to_just_the_mapping(client):
+    test_id = client.post("/api/tests", json={"name": "scoped suggest"}).json()["id"]
+    for role, filename in (("before", "before.csv"), ("after", "after.csv"), ("delta", "delta.csv")):
+        upload(client, test_id, role, filename)
+
+    # Config was auto-detected on upload. Simulate the user hand-toggling a
+    # rule and then only clearing the mapping before asking to re-detect it.
+    config = client.get(f"/api/tests/{test_id}").json()["config"]
+    config["case_sensitive"] = True
+    config["delta_column_map"] = []
+
+    response = client.post(f"/api/tests/{test_id}/config/suggest", json=config)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Untouched fields come back exactly as sent...
+    assert body["case_sensitive"] is True
+    assert body["key_columns"] == config["key_columns"]
+    assert body["last_modified_column"] == config["last_modified_column"]
+    # ...and only the cleared mapping was re-suggested.
+    assert body["delta_column_map"] == [{"delta_column": "country", "target_column": "att1"}]
+
+
 def test_rejects_unsupported_file_type(client):
     test_id = client.post("/api/tests", json={"name": "bad upload"}).json()["id"]
     response = client.post(
@@ -115,6 +137,35 @@ def test_rejects_unsupported_file_type(client):
         files={"file": ("notes.pdf", b"%PDF-1.4", "application/pdf")},
     )
     assert response.status_code == 422
+
+
+def test_load_file_by_local_path(client):
+    test_id = client.post("/api/tests", json={"name": "local path"}).json()["id"]
+    response = client.post(
+        f"/api/tests/{test_id}/files/before/local",
+        json={"path": str(SAMPLES / "before.csv")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["datasets"]["before"]["row_count"] == 3
+
+
+def test_load_file_by_local_path_rejects_missing_file(client):
+    test_id = client.post("/api/tests", json={"name": "local path missing"}).json()["id"]
+    response = client.post(
+        f"/api/tests/{test_id}/files/before/local",
+        json={"path": str(SAMPLES / "does-not-exist.csv")},
+    )
+    assert response.status_code == 422
+
+
+def test_load_file_by_local_path_can_be_disabled(client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.LOCAL_FILES_ENABLED", False)
+    test_id = client.post("/api/tests", json={"name": "local path disabled"}).json()["id"]
+    response = client.post(
+        f"/api/tests/{test_id}/files/before/local",
+        json={"path": str(SAMPLES / "before.csv")},
+    )
+    assert response.status_code == 403
 
 
 def test_missing_test_returns_404(client):

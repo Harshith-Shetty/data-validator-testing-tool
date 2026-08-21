@@ -120,6 +120,12 @@ class TestUpdate(BaseModel):
     description: str | None = None
 
 
+class LocalFilePath(BaseModel):
+    """A path to a file on the machine running the backend, for local dev use."""
+
+    path: str
+
+
 class DatasetSummary(BaseModel):
     role: FileRole
     filename: str

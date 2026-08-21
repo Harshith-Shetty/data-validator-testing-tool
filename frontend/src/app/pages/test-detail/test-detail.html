@@ -60,9 +60,32 @@
               (change)="onFileInput(slot.role, $event)"
             />
           </label>
+
+          <div class="local-path-row">
+            <input
+              type="text"
+              class="local-path-input"
+              placeholder="…or a local file path"
+              [ngModel]="localPathFor(slot.role)"
+              (ngModelChange)="setLocalPath(slot.role, $event)"
+              (keydown.enter)="loadFromPath(slot.role)"
+            />
+            <button
+              type="button"
+              class="small"
+              [disabled]="!localPathFor(slot.role).trim() || !!busyRole()"
+              (click)="loadFromPath(slot.role)"
+            >
+              Load
+            </button>
+          </div>
         </div>
       }
     </div>
+    <p class="muted small local-path-hint">
+      Running the backend on this machine? Paste a path instead of uploading — it reads the file
+      straight off disk.
+    </p>
 
     <!-- ----------------------------------------------------------- previews -->
     @if (dataset('before') || dataset('after') || dataset('delta')) {
@@ -164,8 +187,23 @@
             </div>
           </div>
 
-          <div>
-            <h3>Delta column → data column</h3>
+          <div class="full-width">
+            <div class="mapping-head">
+              <h3>Delta column → data column</h3>
+              <div class="row">
+                <button
+                  type="button"
+                  class="small"
+                  [disabled]="!config()?.delta_column_map?.length"
+                  (click)="resetMapping()"
+                >
+                  Reset
+                </button>
+                <button type="button" class="small" (click)="autoPopulateMapping()">
+                  Auto-populate
+                </button>
+              </div>
+            </div>
             <p class="muted small mapping-intro">
               Each delta column sets the data column you pick here. Rows the feed re-sends
               unchanged are expected to stay exactly as they are.
@@ -190,23 +228,25 @@
                 {{ mappedCount() }} mapped
               </p>
             }
-            @for (deltaColumn of visibleMappingColumns(); track deltaColumn) {
-              <div class="mapping-row">
-                <span class="mono">{{ deltaColumn }}</span>
-                <span class="arrow">→</span>
-                <app-column-picker
-                  [options]="dataColumns()"
-                  [value]="mappingFor(deltaColumn)"
-                  emptyLabel="— ignore —"
-                  placeholder="— ignore —"
-                  (valueChange)="setMapping(deltaColumn, $event)"
-                />
-              </div>
-            } @empty {
-              @if (payloadDeltaColumns().length) {
-                <p class="muted small">No delta column matches that search.</p>
+            <div class="mapping-rows">
+              @for (deltaColumn of visibleMappingColumns(); track deltaColumn) {
+                <div class="mapping-row">
+                  <span class="mono">{{ deltaColumn }}</span>
+                  <span class="arrow">→</span>
+                  <app-column-picker
+                    [options]="dataColumns()"
+                    [value]="mappingFor(deltaColumn)"
+                    emptyLabel="— ignore —"
+                    placeholder="— ignore —"
+                    (valueChange)="setMapping(deltaColumn, $event)"
+                  />
+                </div>
+              } @empty {
+                @if (payloadDeltaColumns().length) {
+                  <p class="muted small">No delta column matches that search.</p>
+                }
               }
-            }
+            </div>
           </div>
 
           <div>
