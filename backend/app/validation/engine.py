@@ -29,13 +29,20 @@ rows.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from ..models import CellStatus, RowType, RuleCode, TestConfig, utcnow
 from .compare import display, key_of, parse_timestamp, values_equal
 
+logger = logging.getLogger(__name__)
+
 _SEVERITY = {CellStatus.INFO: 0, CellStatus.PASS: 1, CellStatus.WARN: 2, CellStatus.FAIL: 3}
+
+# How often to log progress through the row-by-row comparison, so a run over
+# a large dataset shows it is moving instead of going quiet until it's done.
+_PROGRESS_EVERY = 5000
 
 
 def _worst(statuses: list[CellStatus]) -> CellStatus:
@@ -106,6 +113,12 @@ def run_validation(
 ) -> dict[str, Any]:
     started = time.time()
     started_at = utcnow()
+    logger.info(
+        "Validation starting: before=%d after=%d delta=%d rows",
+        len(before["rows"]),
+        len(after["rows"]),
+        len(delta["rows"]),
+    )
 
     if not config.key_columns:
         raise ValidationError("At least one key column is required.")
@@ -149,8 +162,14 @@ def run_validation(
         counter[code] = counter.get(code, 0) + 1
 
     all_keys = list(dict.fromkeys(list(before_index) + list(after_index) + list(delta_index)))
+    total_keys = len(all_keys)
+    logger.info(
+        "Indexed rows (%d ms); comparing %d unique keys...", int((time.time() - started) * 1000), total_keys
+    )
 
-    for key in all_keys:
+    for processed, key in enumerate(all_keys, start=1):
+        if processed % _PROGRESS_EVERY == 0:
+            logger.info("Compared %d/%d rows...", processed, total_keys)
         before_row = before_index.get(key)
         after_row = after_index.get(key)
         delta_row = delta_index.get(key)
@@ -403,6 +422,15 @@ def run_validation(
         results.append(_row(key, row_type, cells, messages))
 
     summary = _summarise(results, grid_columns, config, issues, rows_by_type, started, started_at)
+    logger.info(
+        "Validation finished: status=%s rows=%d passed=%d failed=%d warned=%d (%d ms)",
+        summary["status"],
+        summary["rows_total"],
+        summary["rows_passed"],
+        summary["rows_failed"],
+        summary["rows_warned"],
+        summary["duration_ms"],
+    )
     return {"summary": summary, "rows": results, "columns": grid_columns}
 
 

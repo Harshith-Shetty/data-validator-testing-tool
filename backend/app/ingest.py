@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import io
+import logging
+import time
 from typing import Any
 
 import pandas as pd
 
 from .models import utcnow
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_SUFFIXES = (".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls")
 PREVIEW_ROWS = 10
@@ -43,6 +47,9 @@ def parse_upload(filename: str, content: bytes) -> dict[str, Any]:
             f"Unsupported file type '{filename}'. Expected one of: {', '.join(SUPPORTED_SUFFIXES)}"
         )
 
+    started = time.time()
+    logger.info("Parsing '%s' (%.1f KB)...", filename, len(content) / 1024)
+
     frame = _read_frame(filename, content)
     frame.columns = [str(c).strip() for c in frame.columns]
     frame = frame.loc[:, [c for c in frame.columns if c and not c.startswith("Unnamed:")]]
@@ -54,6 +61,11 @@ def parse_upload(filename: str, content: bytes) -> dict[str, Any]:
     frame = frame.astype(object).where(pd.notna(frame), None)
     rows = frame.to_dict(orient="records")
     rows = [{k: _jsonable(v) for k, v in row.items()} for row in rows]
+
+    elapsed_ms = int((time.time() - started) * 1000)
+    logger.info(
+        "Parsed '%s': %d rows, %d columns (%d ms)", filename, len(rows), len(frame.columns), elapsed_ms
+    )
 
     return {
         "filename": filename,

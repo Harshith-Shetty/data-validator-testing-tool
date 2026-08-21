@@ -66,6 +66,26 @@ off disk, so nothing has to be picked and re-uploaded. Set
 `DVT_ALLOW_LOCAL_FILES=0` to turn this off (e.g. before deploying the backend
 somewhere it should not read the local filesystem for a caller).
 
+### Watching what the backend is doing
+
+Every request logs when it starts and finishes, and the slower steps inside
+it — parsing an upload, re-detecting the column mapping, running a
+validation — log their own timing too, with progress every 5,000 rows on a
+large validation. So a run that's taking a while shows where the time is
+going instead of the terminal going quiet:
+
+```
+--> POST /api/tests/test_.../run
+Validation starting: before=120000 after=120000 delta=8000 rows
+Indexed rows (410 ms); comparing 120000 unique keys...
+Compared 5000/120000 rows...
+...
+Validation finished: status=FAIL rows=120000 passed=... (duration ms)
+<-- POST /api/tests/test_.../run 200 (...ms)
+```
+
+Set `DVT_LOG_LEVEL=WARNING` to quiet this back down, or `DEBUG` for more.
+
 ## Try it with the sample data
 
 `sample-data/` holds the worked example:
